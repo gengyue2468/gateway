@@ -20,6 +20,7 @@ download .env.example .env.example
 if [ ! -e .env ]; then
     cp .env.example .env
 fi
+chmod 0600 .env
 
 if [ ! -e secrets/anubis_ed25519 ]; then
     openssl rand -hex 32 > secrets/anubis_ed25519
