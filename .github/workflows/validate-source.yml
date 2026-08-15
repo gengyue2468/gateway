@@ -23,7 +23,8 @@ jobs:
           go-version-file: cmd/route-renderer/go.mod
 
       - name: Build route renderer
-        run: go build -trimpath -o /tmp/route-renderer ./cmd/route-renderer
+        working-directory: cmd/route-renderer
+        run: go build -trimpath -o /tmp/route-renderer .
 
       - name: Validate route fixtures
         run: |
