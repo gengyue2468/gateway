@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - path: ^/reload
+    service: https://origin-b.example.com
+    health:
+      uri: /
+  - service: http_status:444

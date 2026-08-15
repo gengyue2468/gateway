@@ -1,0 +1,3 @@
+version: 1
+ingress:
+  - service: http_status:444

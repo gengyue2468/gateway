@@ -1,0 +1,8 @@
+version: 1
+ingress:
+  - hostname: your-domain.example
+    service: https://origin.example.com
+    health:
+      uri: healthz
+      interval: not-a-duration
+  - service: http_status:444

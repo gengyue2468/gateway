@@ -1,0 +1,4 @@
+version: 1
+ingress:
+  - hostname: your-domain.example
+    service: https://origin.example.com

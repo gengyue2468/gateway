@@ -1,0 +1,48 @@
+name: gateway
+
+services:
+  gateway:
+    image: ghcr.io/gengyue2468/gateway:latest
+    container_name: gateway
+    restart: unless-stopped
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+      CADDY_CONFIG: /run/gateway/edge.Caddyfile
+      ANUBIS_DIFFICULTY: ${ANUBIS_DIFFICULTY:-4}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./config:/etc/gateway/config:ro
+      - gateway-edge-data:/var/lib/gateway/edge-data
+      - gateway-edge-config:/var/lib/gateway/edge-config
+      - gateway-anubis-state:/data/anubis
+      - gateway-backend-cache:/var/lib/gateway/backend-cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    secrets:
+      - anubis_ed25519
+      - cloudflare_api_token
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/anubis", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+volumes:
+  gateway-edge-data:
+    name: gateway-edge-data
+  gateway-edge-config:
+    name: gateway-edge-config
+  gateway-anubis-state:
+    name: gateway-anubis-state
+  gateway-backend-cache:
+    name: gateway-backend-cache
+
+secrets:
+  anubis_ed25519:
+    file: ./secrets/anubis_ed25519
+  cloudflare_api_token:
+    environment: CF_API_TOKEN

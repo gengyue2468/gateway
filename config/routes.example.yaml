@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=./routes.schema.json
+version: 1
+
+ingress:
+  - hostname: your-domain.example
+    service: https://origin.example.com
+    health:
+      uri: /
+
+  - service: http_status:444

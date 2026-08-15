@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - hostname: your-domain.example
+    service: https://origin-a.example.com
+  - hostname: your-domain.example
+    service: https://origin-b.example.com
+  - service: http_status:444

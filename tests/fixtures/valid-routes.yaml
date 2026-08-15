@@ -1,0 +1,14 @@
+version: 1
+ingress:
+  - hostname: your-domain.example
+    service: https://origin.example.com
+    health:
+      uri: /
+  - hostname: api.your-domain.example
+    path: ^/v1/
+    service:
+      - https://api-a.example.com
+      - https://api-b.example.com
+    load_balance: round_robin
+    cache: false
+  - service: http_status:444

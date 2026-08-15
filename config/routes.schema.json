@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gateway ingress routes",
+  "description": "Cloudflared-inspired ingress rules rendered into Caddy configuration.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "ingress"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "ingress": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Rules are evaluated from top to bottom; the final rule must be the 444 catch-all. An empty gateway may contain only the catch-all.",
+      "items": {
+        "$ref": "#/$defs/route"
+      }
+    }
+  },
+  "$defs": {
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service"],
+      "properties": {
+        "hostname": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(\\*\\.)?[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "description": "Exact hostname or a leading wildcard such as *.example.com."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "RE2-compatible path regular expression."
+        },
+        "service": {
+          "description": "An http(s)/h2c upstream URL, a list of upstream URLs, or the final http_status:444 rule.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        },
+        "cache": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the shared GET/HEAD cache for this route."
+        },
+        "load_balance": {
+          "type": "string",
+          "enum": [
+            "random",
+            "first",
+            "round_robin",
+            "least_conn",
+            "ip_hash",
+            "client_ip_hash",
+            "uri_hash"
+          ],
+          "default": "random"
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "default": "/healthz"
+            },
+            "interval": {
+              "type": "string",
+              "minLength": 1,
+              "default": "30s"
+            },
+            "timeout": {
+              "type": "string",
+              "minLength": 1,
+              "default": "5s"
+            },
+            "try_duration": {
+              "type": "string",
+              "minLength": 1,
+              "default": "5s"
+            }
+          }
+        }
+      }
+    }
+  }
+}

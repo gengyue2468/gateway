@@ -1,0 +1,7 @@
+# yaml-language-server: $schema=./routes.schema.json
+version: 1
+
+# The default configuration denies all traffic. Copy routes.example.yaml,
+# replace its placeholders, and save it here to enable a real origin.
+ingress:
+  - service: http_status:444

@@ -1,0 +1,12 @@
+.git
+.gitmodules
+.github
+.env
+.env.*
+!*.example
+secrets
+build
+tests
+vendor/anubis
+*.tar
+*.tar.gz

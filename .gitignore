@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+
+secrets/*
+!secrets/.gitkeep
+
+build/
+*.tar
+*.tar.gz
+
+# Local-only test fixtures.
+toy-origin/
+mock-origin/
