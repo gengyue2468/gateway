@@ -12,7 +12,7 @@ if [ "$platform" != "linux/amd64" ]; then
 fi
 
 architecture=$(docker info --format '{{.Architecture}}')
-if [ "$architecture" != "amd64" ]; then
+if [ "$architecture" != "amd64" ] && [ "$architecture" != "x86_64" ]; then
     printf 'this builder is %s; an amd64 EOS builder is required\n' "$architecture" >&2
     exit 1
 fi
