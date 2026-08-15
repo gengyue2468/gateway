@@ -2,8 +2,9 @@
 set -eu
 
 runtime_dir=/run/gateway
-config_dir=/etc/gateway/config
-backend_config=${BACKEND_CONFIG:-$config_dir/caddy/Caddyfile}
+static_config_dir=/usr/share/gateway/config
+runtime_config_dir=${GATEWAY_RUNTIME_CONFIG_DIR:-/etc/gateway/runtime-config}
+backend_config=${BACKEND_CONFIG:-$static_config_dir/caddy/Caddyfile}
 edge_config=${CADDY_CONFIG:-$runtime_dir/edge.Caddyfile}
 backend_admin=127.0.0.1:2020
 edge_admin=127.0.0.1:2019
@@ -14,8 +15,16 @@ backend_config_data=/var/lib/gateway/backend-config
 anubis_data=/data/anubis
 anubis_key=${ED25519_PRIVATE_KEY_HEX_FILE:-${anubis_data}/ed25519.key}
 
-mkdir -p "$runtime_dir" "$edge_data" "$edge_config_data" "$backend_cache" \
-    "$backend_config_data" "$anubis_data"
+mkdir -p "$runtime_dir" "$runtime_config_dir" "$edge_data" "$edge_config_data" \
+    "$backend_cache" "$backend_config_data" "$anubis_data"
+
+route_config_path() {
+    if [ -r "$runtime_config_dir/routes.yaml" ]; then
+        printf '%s\n' "$runtime_config_dir/routes.yaml"
+    else
+        printf '%s\n' "$static_config_dir/routes.yaml"
+    fi
+}
 
 secret=/run/secrets/anubis_ed25519
 if [ ! -r "$secret" ]; then
@@ -40,7 +49,7 @@ export CF_API_TOKEN
 
 render_and_validate() {
     /usr/local/bin/route-renderer \
-        --config "$config_dir/routes.yaml" \
+        --config "$(route_config_path)" \
         --edge-output "$runtime_dir/edge.Caddyfile" \
         --origin-output "$runtime_dir/backend.caddy"
 
@@ -67,9 +76,9 @@ reload_configs() {
 
 config_fingerprint() {
     sha256sum \
-        "$config_dir/routes.yaml" \
+        "$(route_config_path)" \
         "$backend_config" \
-        "$config_dir/caddy/waf/overrides.conf" 2>/dev/null || true
+        "$static_config_dir/caddy/waf/overrides.conf" 2>/dev/null || true
 }
 
 watch_configs() {
@@ -98,7 +107,7 @@ export DIFFICULTY=${ANUBIS_DIFFICULTY:-4}
 export ED25519_PRIVATE_KEY_HEX_FILE="$anubis_key"
 export METRICS_BIND=${ANUBIS_METRICS_BIND:-:9090}
 export METRICS_BIND_NETWORK=${ANUBIS_METRICS_BIND_NETWORK:-tcp}
-export POLICY_FNAME=${ANUBIS_POLICY_FNAME:-$config_dir/anubis/bot-policy.yaml}
+export POLICY_FNAME=${ANUBIS_POLICY_FNAME:-$static_config_dir/anubis/bot-policy.yaml}
 export SERVE_ROBOTS_TXT=${SERVE_ROBOTS_TXT:-0}
 export TARGET=${TARGET:-http://127.0.0.1:8080}
 

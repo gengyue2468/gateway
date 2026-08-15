@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=../../config/routes.schema.json
+version: 1
+
+# Replace this with your production routes.
+ingress:
+  - service: http_status:444

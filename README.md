@@ -1,33 +1,44 @@
 # Gateway
 
 Anubis bot protection, Caddy TLS, Coraza WAF, and multi-domain routing in one
-container.
+amd64 container.
 
-## Production
+## Deploy Without Cloning
 
-The production Compose file pulls the public image
-`ghcr.io/gengyue2468/gateway:latest`; it does not build locally.
+The public image is `ghcr.io/gengyue2468/gateway:latest`. A small deployment
+bundle contains only Compose, routes, environment, and the Anubis secret:
 
 ```sh
-cp .env.example .env
-mkdir -p secrets
-openssl rand -hex 32 > secrets/anubis_ed25519
-chmod 0600 secrets/anubis_ed25519
+mkdir gateway-deploy && cd gateway-deploy
+curl -fsSL https://raw.githubusercontent.com/gengyue2468/gateway/main/deploy/install.sh -o install.sh
+sh install.sh
 # Set ACME_EMAIL and CF_API_TOKEN in .env.
+# Edit config/routes.yaml.
 docker compose up -d
 ```
 
-Edit `config/routes.yaml` to add routes. Changes to routes, the backend Caddy
-file, and WAF overrides are hot-reloaded. Update the image with:
+Update the image with:
 
 ```sh
 docker compose pull
 docker compose up -d
 ```
 
-## Development
+Route changes are hot-reloaded without rebuilding or restarting the container.
 
-EOS can build the image locally when needed:
+## Release From EOS
+
+EOS is the amd64 release builder. Log in to GHCR, then run:
+
+```sh
+docker login ghcr.io
+scripts/publish-image.sh
+```
+
+The script builds locally, runs the tests, and pushes `latest` plus a commit
+tag. Other hosts never compile the image.
+
+## Development
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build

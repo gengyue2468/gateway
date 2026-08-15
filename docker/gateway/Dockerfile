@@ -54,7 +54,7 @@ RUN apt-get update \
     && useradd --system --uid 1000 --gid anubis --home-dir /nonexistent --shell /usr/sbin/nologin anubis \
     && mkdir -p \
         /data/anubis \
-        /etc/gateway/config \
+        /usr/share/gateway/config \
         /run/gateway \
         /var/lib/gateway/edge-data \
         /var/lib/gateway/edge-config \
@@ -67,7 +67,7 @@ COPY --from=build /build/renderer/route-renderer /usr/local/bin/route-renderer
 COPY --from=build /build/anubis/var/anubis /usr/local/bin/anubis
 COPY --from=build /build/anubis/var/robots2policy /usr/local/bin/robots2policy
 
-COPY config /etc/gateway/config
+COPY config /usr/share/gateway/config
 COPY docker/gateway/entrypoint.sh /usr/local/bin/gateway-entrypoint
 
 RUN chmod 0755 \

@@ -1,0 +1,54 @@
+name: Validate Gateway Source
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/route-renderer/go.mod
+
+      - name: Build route renderer
+        run: go build -trimpath -o /tmp/route-renderer ./cmd/route-renderer
+
+      - name: Validate route fixtures
+        run: |
+          /tmp/route-renderer --config tests/fixtures/valid-routes.yaml --check
+          /tmp/route-renderer --config tests/fixtures/empty-routes.yaml --check
+
+      - name: Check shell scripts
+        run: |
+          sh -n docker/gateway/entrypoint.sh
+          sh -n scripts/publish-image.sh
+          sh -n deploy/install.sh
+          sh -n tests/run.sh
+          sh -n tests/hot-reload.sh
+
+      - name: Prepare Compose validation secret
+        run: |
+          mkdir -p secrets deploy/secrets
+          openssl rand -hex 32 > secrets/anubis_ed25519
+          cp secrets/anubis_ed25519 deploy/secrets/anubis_ed25519
+
+      - name: Validate Compose files
+        env:
+          ACME_EMAIL: admin@example.com
+          CF_API_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f deploy/docker-compose.yml config --quiet
+          cmp -s docker-compose.yml deploy/docker-compose.yml

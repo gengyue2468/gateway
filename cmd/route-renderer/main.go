@@ -415,7 +415,7 @@ func renderWAF(b *strings.Builder, indent string) {
 	fmt.Fprintf(b, "%s        Include @coraza.conf-recommended\n", indent)
 	fmt.Fprintf(b, "%s        Include @crs-setup.conf.example\n", indent)
 	fmt.Fprintf(b, "%s        Include @owasp_crs/*.conf\n", indent)
-	fmt.Fprintf(b, "%s        Include /etc/gateway/config/caddy/waf/overrides.conf\n", indent)
+	fmt.Fprintf(b, "%s        Include /usr/share/gateway/config/caddy/waf/overrides.conf\n", indent)
 	fmt.Fprintf(b, "%s        SecRuleEngine On\n", indent)
 	fmt.Fprintf(b, "%s    `\n", indent)
 	fmt.Fprintf(b, "%s}\n", indent)

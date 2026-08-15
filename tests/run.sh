@@ -71,7 +71,7 @@ validate_caddy_configs() {
                 --config /tests/fixtures/$fixture \
                 --edge-output /run/gateway/edge.Caddyfile \
                 --origin-output /run/gateway/backend.caddy && \
-            caddy validate --config /etc/gateway/config/caddy/Caddyfile --adapter caddyfile && \
+            caddy validate --config /usr/share/gateway/config/caddy/Caddyfile --adapter caddyfile && \
             caddy validate --config /run/gateway/edge.Caddyfile --adapter caddyfile"
 }
 
