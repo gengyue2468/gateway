@@ -7,6 +7,7 @@ services:
     restart: unless-stopped
     environment:
       ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+      ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN: ${ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN:-}
       CADDY_CONFIG: /run/gateway/edge.Caddyfile
       ANUBIS_DIFFICULTY: ${ANUBIS_DIFFICULTY:-4}
     ports:

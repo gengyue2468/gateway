@@ -26,6 +26,24 @@ docker compose up -d
 
 Route changes are hot-reloaded without rebuilding or restarting the container.
 
+## Certificate Validation
+
+The edge uses two redundant ACME issuers: Cloudflare DNS-01 first, followed by
+Caddy's native HTTP-01/TLS-ALPN-01 challenges. The latter is a fallback only;
+with geo-distributed DNS, DNS-01 is the reliable method.
+
+If the hostname is delegated to another DNS provider, delegate its ACME
+challenge to a Cloudflare-managed zone with one CNAME record. For example, if
+`www.gengyue.dev` is an AliDNS child zone, create this record there:
+
+```text
+_acme-challenge.www.gengyue.dev. CNAME _acme-challenge.cdnno.de.
+```
+
+Then set `ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN` in `.env` to the full target
+name. This does not affect the geo-distributed `www` records and does not add
+ACME settings to `routes.yaml`.
+
 ## Route Actions
 
 Routes may use these actions in addition to `service`:

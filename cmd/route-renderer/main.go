@@ -81,6 +81,7 @@ type normalizedHealth struct {
 }
 
 var hostnamePattern = regexp.MustCompile(`^(\*\.)?[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+var acmeOverrideDomainPattern = regexp.MustCompile(`^_acme-challenge(\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+\.?$`)
 
 func main() {
 	configPath := flag.String("config", defaultConfig, "route YAML path")
@@ -93,17 +94,32 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	acmeOverrideDomain, err := loadACMEOverrideDomain()
+	if err != nil {
+		fatal(err)
+	}
 
 	if *checkOnly {
 		return
 	}
 
-	if err := writeAtomically(*edgeOutput, renderEdge(cfg)); err != nil {
+	if err := writeAtomically(*edgeOutput, renderEdge(cfg, acmeOverrideDomain)); err != nil {
 		fatal(fmt.Errorf("write edge config: %w", err))
 	}
 	if err := writeAtomically(*originOutput, renderOrigin(cfg)); err != nil {
 		fatal(fmt.Errorf("write origin config: %w", err))
 	}
+}
+
+func loadACMEOverrideDomain() (string, error) {
+	value := strings.TrimSpace(os.Getenv("ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN"))
+	if value == "" {
+		return "", nil
+	}
+	if !acmeOverrideDomainPattern.MatchString(value) {
+		return "", fmt.Errorf("ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN must be a full _acme-challenge DNS name, got %q", value)
+	}
+	return value, nil
 }
 
 func loadConfig(path string) (Config, error) {
@@ -398,7 +414,7 @@ func (r Route) health() normalizedHealth {
 	return result
 }
 
-func renderEdge(cfg Config) string {
+func renderEdge(cfg Config, acmeOverrideDomain string) string {
 	hosts := make([]string, 0, len(cfg.Ingress))
 	seen := make(map[string]struct{})
 	for _, route := range cfg.Ingress {
@@ -426,8 +442,14 @@ func renderEdge(cfg Config) string {
 	fmt.Fprintf(&b, "%s {\n", strings.Join(hosts, " "))
 	b.WriteString("    tls {\n")
 	b.WriteString("        protocols tls1.3 tls1.3\n")
-	b.WriteString("        dns cloudflare {env.CF_API_TOKEN}\n")
-	b.WriteString("        resolvers 1.1.1.1\n")
+	b.WriteString("        issuer acme {\n")
+	b.WriteString("            dns cloudflare {env.CF_API_TOKEN}\n")
+	if acmeOverrideDomain != "" {
+		fmt.Fprintf(&b, "            dns_challenge_override_domain %s\n", caddyQuote(acmeOverrideDomain))
+	}
+	b.WriteString("            resolvers 1.1.1.1\n")
+	b.WriteString("        }\n")
+	b.WriteString("        issuer acme\n")
 	b.WriteString("    }\n\n")
 	for index, route := range cfg.Ingress {
 		if route.isCatchAll() || !route.BypassAnubis {

@@ -3,6 +3,7 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 image=${GATEWAY_IMAGE:-gateway:local}
+acme_override=${ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN:-_acme-challenge.cdnno.de}
 tmp_dir=$(mktemp -d)
 passed=0
 
@@ -29,6 +30,7 @@ expect_failure() {
 
 run_renderer() {
     docker run --rm \
+        -e "ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=$acme_override" \
         --entrypoint /usr/local/bin/route-renderer \
         -v "$repo_dir/tests/fixtures:/tests/fixtures:ro" \
         -v "$tmp_dir:/tmp/gateway-tests" \
@@ -49,6 +51,9 @@ run_renderer \
     --edge-output /tmp/gateway-tests/edge.Caddyfile \
     --origin-output /tmp/gateway-tests/backend.caddy
 if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'issuer acme {' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'dns_challenge_override_domain "_acme-challenge.cdnno.de"' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'issuer acme' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'redir "https://your-domain.example{uri}" 302' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F 'rewrite * "/new{uri}"' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F 'meta http-equiv=\"refresh\"' "$tmp_dir/backend.caddy" >/dev/null; then
@@ -72,6 +77,7 @@ validate_caddy_configs() {
     docker run --rm \
         -e ACME_EMAIL=admin@example.com \
         -e CF_API_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+        -e "ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=$acme_override" \
         -v "$repo_dir/tests/fixtures:/tests/fixtures:ro" \
         --entrypoint /bin/sh "$image" -c "\
             /usr/local/bin/route-renderer \
@@ -101,12 +107,19 @@ expect_failure "redirect cannot include an upstream" \
     run_renderer --config /tests/fixtures/invalid-action-service.yaml --check
 expect_failure "Anubis bypass requires a path" \
     run_renderer --config /tests/fixtures/invalid-bypass.yaml --check
+expect_failure "invalid ACME override is rejected" \
+    docker run --rm \
+        -e ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=cdnno.de \
+        --entrypoint /usr/local/bin/route-renderer \
+        -v "$repo_dir/tests/fixtures:/tests/fixtures:ro" \
+        "$image" --config /tests/fixtures/empty-routes.yaml --check
 
 sh -n "$repo_dir/docker/gateway/entrypoint.sh"
 pass "gateway entrypoint passes shell syntax check"
 
 ACME_EMAIL=admin@example.com \
 CF_API_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=_acme-challenge.cdnno.de \
 ANUBIS_DIFFICULTY=4 \
 docker compose --project-directory "$repo_dir" \
     -f "$repo_dir/docker-compose.yml" config --quiet
