@@ -1,5 +1,18 @@
 version: 1
 ingress:
+  - hostname: terminal.your-domain.example
+    path: ^/tty(/.*)?$
+    service: https://origin.example.com
+    cache: false
+    bypass_anubis: true
+  - hostname: old.your-domain.example
+    redirect: https://your-domain.example{uri}
+  - hostname: your-domain.example
+    path: ^/legacy(/.*)?$
+    rewrite: /new{uri}
+    service: https://origin.example.com
+  - hostname: browser.your-domain.example
+    meta_redirect: https://your-domain.example/
   - hostname: your-domain.example
     service: https://origin.example.com
     health:

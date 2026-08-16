@@ -48,7 +48,14 @@ run_renderer \
     --config /tests/fixtures/valid-routes.yaml \
     --edge-output /tmp/gateway-tests/edge.Caddyfile \
     --origin-output /tmp/gateway-tests/backend.caddy
-pass "rendered Caddy configuration contains HTTPS upstream and health URI"
+if ! grep -F 'reverse_proxy 127.0.0.1:8080' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'redir "https://your-domain.example{uri}" 302' "$tmp_dir/backend.caddy" >/dev/null \
+    || ! grep -F 'rewrite * "/new{uri}"' "$tmp_dir/backend.caddy" >/dev/null \
+    || ! grep -F 'meta http-equiv=\"refresh\"' "$tmp_dir/backend.caddy" >/dev/null; then
+    printf 'not ok - rewrite, redirect, meta redirect, or Anubis bypass was not rendered\n' >&2
+    exit 1
+fi
+pass "rewrite, redirect, meta redirect, and Anubis bypass render"
 
 run_renderer \
     --config /tests/fixtures/empty-routes.yaml \
@@ -90,6 +97,10 @@ expect_failure "invalid health settings are rejected" \
     run_renderer --config /tests/fixtures/invalid-health.yaml --check
 expect_failure "unknown YAML fields are rejected" \
     run_renderer --config /tests/fixtures/invalid-unknown-field.yaml --check
+expect_failure "redirect cannot include an upstream" \
+    run_renderer --config /tests/fixtures/invalid-action-service.yaml --check
+expect_failure "Anubis bypass requires a path" \
+    run_renderer --config /tests/fixtures/invalid-bypass.yaml --check
 
 sh -n "$repo_dir/docker/gateway/entrypoint.sh"
 pass "gateway entrypoint passes shell syntax check"

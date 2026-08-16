@@ -1,0 +1,6 @@
+version: 1
+ingress:
+  - hostname: old.your-domain.example
+    service: https://origin.example.com
+    redirect: https://new.example.com/
+  - service: http_status:444

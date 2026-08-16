@@ -2,6 +2,28 @@
 version: 1
 
 ingress:
+  # WebSocket paths that cannot pass through Anubis can bypass only the
+  # challenge proxy while still using backend Caddy and Coraza WAF.
+  - hostname: terminal.your-domain.example
+    path: ^/tty(/.*)?$
+    service: https://origin.example.com
+    cache: false
+    bypass_anubis: true
+
+  # redirect is a normal HTTP 302; no status field is needed.
+  - hostname: old.your-domain.example
+    redirect: https://your-domain.example{uri}
+
+  # rewrite changes the URI internally before proxying.
+  - hostname: your-domain.example
+    path: ^/legacy(/.*)?$
+    rewrite: /new{uri}
+    service: https://origin.example.com
+
+  # meta_redirect is intentionally explicit and browser-only.
+  - hostname: browser.your-domain.example
+    meta_redirect: https://your-domain.example/
+
   - hostname: your-domain.example
     service: https://origin.example.com
     health:

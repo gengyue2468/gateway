@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - hostname: terminal.your-domain.example
+    service: https://origin.example.com
+    cache: false
+    bypass_anubis: true
+  - service: http_status:444

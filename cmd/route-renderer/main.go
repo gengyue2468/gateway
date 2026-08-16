@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"net/url"
 	"os"
@@ -28,12 +29,16 @@ type Config struct {
 }
 
 type Route struct {
-	Hostname    string        `yaml:"hostname,omitempty"`
-	Path        string        `yaml:"path,omitempty"`
-	Service     ServiceList   `yaml:"service"`
-	Cache       *bool         `yaml:"cache,omitempty"`
-	LoadBalance string        `yaml:"load_balance,omitempty"`
-	Health      *HealthConfig `yaml:"health,omitempty"`
+	Hostname     string        `yaml:"hostname,omitempty"`
+	Path         string        `yaml:"path,omitempty"`
+	Service      ServiceList   `yaml:"service,omitempty"`
+	Redirect     string        `yaml:"redirect,omitempty"`
+	Rewrite      string        `yaml:"rewrite,omitempty"`
+	MetaRedirect string        `yaml:"meta_redirect,omitempty"`
+	BypassAnubis bool          `yaml:"bypass_anubis,omitempty"`
+	Cache        *bool         `yaml:"cache,omitempty"`
+	LoadBalance  string        `yaml:"load_balance,omitempty"`
+	Health       *HealthConfig `yaml:"health,omitempty"`
 }
 
 type ServiceList []string
@@ -184,17 +189,60 @@ func validateRoute(index int, route Route, isLast bool) error {
 	if route.Hostname == "" && route.Path == "" && !route.isCatchAll() {
 		return fmt.Errorf("%s must declare hostname or path", prefix)
 	}
-	if len(route.Service) == 0 {
-		return fmt.Errorf("%s service must not be empty", prefix)
-	}
 	if route.isCatchAll() {
 		if !isLast {
 			return fmt.Errorf("%s catch-all must be the final rule", prefix)
 		}
-		if route.Cache != nil || route.LoadBalance != "" || route.Health != nil {
+		if route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis {
 			return fmt.Errorf("%s catch-all cannot have route options", prefix)
 		}
 		return nil
+	}
+
+	terminalActions := 0
+	if route.Redirect != "" {
+		terminalActions++
+	}
+	if route.MetaRedirect != "" {
+		terminalActions++
+	}
+	if terminalActions > 1 {
+		return fmt.Errorf("%s may define only one of redirect or meta_redirect", prefix)
+	}
+	if route.Rewrite != "" && terminalActions > 0 {
+		return fmt.Errorf("%s rewrite cannot be combined with redirect or meta_redirect", prefix)
+	}
+	if route.Redirect != "" {
+		if err := validateRedirectTarget(route.Redirect); err != nil {
+			return fmt.Errorf("%s redirect: %w", prefix, err)
+		}
+		if len(route.Service) != 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis {
+			return fmt.Errorf("%s redirect cannot have service or route options", prefix)
+		}
+		return nil
+	}
+	if route.MetaRedirect != "" {
+		if err := validateRedirectTarget(route.MetaRedirect); err != nil {
+			return fmt.Errorf("%s meta_redirect: %w", prefix, err)
+		}
+		if len(route.Service) != 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis {
+			return fmt.Errorf("%s meta_redirect cannot have service or route options", prefix)
+		}
+		return nil
+	}
+	if len(route.Service) == 0 {
+		return fmt.Errorf("%s service must not be empty unless it is a redirect or meta_redirect", prefix)
+	}
+	if route.Rewrite != "" {
+		if err := validateRewriteTarget(route.Rewrite); err != nil {
+			return fmt.Errorf("%s rewrite: %w", prefix, err)
+		}
+	}
+	if route.BypassAnubis && route.Path == "" {
+		return fmt.Errorf("%s bypass_anubis requires a path regexp", prefix)
+	}
+	if route.BypassAnubis && route.Cache != nil && *route.Cache {
+		return fmt.Errorf("%s bypass_anubis routes must set cache: false", prefix)
 	}
 	serviceScheme := ""
 	seenServices := make(map[string]struct{})
@@ -268,11 +316,60 @@ func validateService(service string) error {
 	return nil
 }
 
+func validateRedirectTarget(target string) error {
+	if target == "" || hasUnsafeTargetText(target) {
+		return errors.New("target must be a non-empty URL or absolute path without whitespace or Caddyfile control characters")
+	}
+	if !balancedPlaceholders(target) {
+		return errors.New("target has unbalanced Caddy placeholders")
+	}
+	if strings.HasPrefix(target, "/") {
+		if strings.HasPrefix(target, "//") {
+			return errors.New("protocol-relative targets are not allowed")
+		}
+		return nil
+	}
+
+	base := target
+	if marker := strings.IndexByte(base, '{'); marker >= 0 {
+		base = base[:marker]
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return errors.New("target must be an absolute http(s) URL or an absolute path")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("target URL must use http or https")
+	}
+	return nil
+}
+
+func validateRewriteTarget(target string) error {
+	if target == "" || hasUnsafeTargetText(target) || !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") {
+		return errors.New("target must be an absolute path without whitespace or Caddyfile control characters")
+	}
+	if !balancedPlaceholders(target) {
+		return errors.New("target has unbalanced Caddy placeholders")
+	}
+	return nil
+}
+
+func hasUnsafeTargetText(value string) bool {
+	return strings.ContainsAny(value, " \t\r\n`\\\"")
+}
+
+func balancedPlaceholders(value string) bool {
+	return strings.Count(value, "{") == strings.Count(value, "}")
+}
+
 func (r Route) isCatchAll() bool {
 	return r.Hostname == "" && r.Path == "" && len(r.Service) == 1 && r.Service[0] == "http_status:444"
 }
 
 func (r Route) cacheEnabled() bool {
+	if r.BypassAnubis {
+		return false
+	}
 	return r.Cache == nil || *r.Cache
 }
 
@@ -332,13 +429,38 @@ func renderEdge(cfg Config) string {
 	b.WriteString("        dns cloudflare {env.CF_API_TOKEN}\n")
 	b.WriteString("        resolvers 1.1.1.1\n")
 	b.WriteString("    }\n\n")
-	b.WriteString("    reverse_proxy 127.0.0.1:8923 {\n")
-	b.WriteString("        header_up X-Forwarded-For {remote_host}\n")
-	b.WriteString("        header_up X-Real-IP {remote_host}\n")
-	b.WriteString("        header_up X-Http-Version {http.request.proto}\n")
+	for index, route := range cfg.Ingress {
+		if route.isCatchAll() || !route.BypassAnubis {
+			continue
+		}
+		fmt.Fprintf(&b, "    @bypass%d {\n", index)
+		if route.Hostname != "" {
+			fmt.Fprintf(&b, "        host %s\n", route.Hostname)
+		}
+		fmt.Fprintf(&b, "        path_regexp bypass%d %s\n", index, caddyQuote(route.Path))
+		b.WriteString("    }\n")
+	}
+	for index, route := range cfg.Ingress {
+		if route.isCatchAll() || !route.BypassAnubis {
+			continue
+		}
+		fmt.Fprintf(&b, "    handle @bypass%d {\n", index)
+		renderEdgeProxy(&b, "        ", "127.0.0.1:8080")
+		b.WriteString("    }\n")
+	}
+	b.WriteString("    handle {\n")
+	renderEdgeProxy(&b, "        ", "127.0.0.1:8923")
 	b.WriteString("    }\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func renderEdgeProxy(b *strings.Builder, indent string, upstream string) {
+	fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, upstream)
+	fmt.Fprintf(b, "%s    header_up X-Forwarded-For {remote_host}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Real-IP {remote_host}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Http-Version {http.request.proto}\n", indent)
+	fmt.Fprintf(b, "%s}\n", indent)
 }
 
 func renderOrigin(cfg Config) string {
@@ -348,7 +470,7 @@ func renderOrigin(cfg Config) string {
 			continue
 		}
 		renderMatcher(&b, index, route)
-		if route.cacheEnabled() {
+		if route.isProxyRoute() && route.cacheEnabled() {
 			renderCacheMatcher(&b, index)
 		}
 		b.WriteString("\n")
@@ -359,24 +481,33 @@ func renderOrigin(cfg Config) string {
 			continue
 		}
 		fmt.Fprintf(&b, "handle @route%d {\n", index)
-		b.WriteString("    route {\n")
-		renderWAF(&b, "        ")
-		if route.cacheEnabled() {
-			fmt.Fprintf(&b, "        handle @cacheable%d {\n", index)
-			b.WriteString("            cache {\n")
-			b.WriteString("                ttl 10m\n")
-			b.WriteString("                default_cache_control no-store\n")
-			b.WriteString("                otter {\n")
-			b.WriteString("                    configuration {\n")
-			b.WriteString("                        size 50000\n")
-			b.WriteString("                    }\n")
-			b.WriteString("                }\n")
-			b.WriteString("            }\n")
-			renderProxy(&b, "            ", route)
-			b.WriteString("        }\n")
+		if route.Redirect != "" {
+			fmt.Fprintf(&b, "    redir %s 302\n", caddyQuote(route.Redirect))
+		} else if route.MetaRedirect != "" {
+			renderMetaRedirect(&b, "    ", route.MetaRedirect)
+		} else {
+			b.WriteString("    route {\n")
+			if route.Rewrite != "" {
+				fmt.Fprintf(&b, "        rewrite * %s\n", caddyQuote(route.Rewrite))
+			}
+			renderWAF(&b, "        ")
+			if route.cacheEnabled() {
+				fmt.Fprintf(&b, "        handle @cacheable%d {\n", index)
+				b.WriteString("            cache {\n")
+				b.WriteString("                ttl 10m\n")
+				b.WriteString("                default_cache_control no-store\n")
+				b.WriteString("                otter {\n")
+				b.WriteString("                    configuration {\n")
+				b.WriteString("                        size 50000\n")
+				b.WriteString("                    }\n")
+				b.WriteString("                }\n")
+				b.WriteString("            }\n")
+				renderProxy(&b, "            ", route)
+				b.WriteString("        }\n")
+			}
+			renderProxy(&b, "        ", route)
+			b.WriteString("    }\n")
 		}
-		renderProxy(&b, "        ", route)
-		b.WriteString("    }\n")
 		b.WriteString("}\n\n")
 	}
 
@@ -384,6 +515,23 @@ func renderOrigin(cfg Config) string {
 	b.WriteString("    close\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func (r Route) isProxyRoute() bool {
+	return r.Redirect == "" && r.MetaRedirect == ""
+}
+
+func renderMetaRedirect(b *strings.Builder, indent string, target string) {
+	body := fmt.Sprintf(
+		"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url=%s\"><title>Continue</title></head><body><a href=\"%s\">Continue</a></body></html>",
+		html.EscapeString(target),
+		html.EscapeString(target),
+	)
+	b.WriteString(indent + "header {\n")
+	b.WriteString(indent + "    Content-Type \"text/html; charset=utf-8\"\n")
+	b.WriteString(indent + "    Cache-Control \"no-store\"\n")
+	b.WriteString(indent + "}\n")
+	fmt.Fprintf(b, "%srespond %s 200\n", indent, caddyQuote(body))
 }
 
 func renderMatcher(b *strings.Builder, index int, route Route) {

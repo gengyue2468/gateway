@@ -22,7 +22,6 @@
     "route": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["service"],
       "properties": {
         "hostname": {
           "type": "string",
@@ -52,6 +51,26 @@
               }
             }
           ]
+        },
+        "redirect": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client redirect target. The renderer emits a standard HTTP 302 response."
+        },
+        "rewrite": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Internal absolute-path rewrite applied before proxying."
+        },
+        "meta_redirect": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Explicit browser-only 200 HTML meta-refresh target. Do not use for HTTP-to-HTTPS or WebSocket routes."
+        },
+        "bypass_anubis": {
+          "type": "boolean",
+          "default": false,
+          "description": "Send this path directly from edge Caddy to backend Caddy, retaining the backend WAF. Requires a path and cache: false when cache is specified."
         },
         "cache": {
           "type": "boolean",
@@ -94,10 +113,58 @@
               "type": "string",
               "minLength": 1,
               "default": "5s"
+          }
+        }
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["service"],
+          "not": {
+            "anyOf": [
+              { "required": ["redirect"] },
+              { "required": ["meta_redirect"] }
+            ]
+          }
+        },
+        {
+          "required": ["redirect"],
+          "not": {
+            "anyOf": [
+              { "required": ["service"] },
+              { "required": ["rewrite"] },
+              { "required": ["meta_redirect"] },
+              { "required": ["bypass_anubis"] }
+            ]
+          }
+        },
+        {
+          "required": ["meta_redirect"],
+          "not": {
+            "anyOf": [
+              { "required": ["service"] },
+              { "required": ["rewrite"] },
+              { "required": ["redirect"] },
+              { "required": ["bypass_anubis"] }
+            ]
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": { "required": ["rewrite"] },
+          "then": { "required": ["service"] }
+        },
+        {
+          "if": { "required": ["bypass_anubis"] },
+          "then": {
+            "required": ["service", "path"],
+            "properties": {
+              "cache": { "const": false }
             }
           }
         }
-      }
+      ]
     }
   }
 }
