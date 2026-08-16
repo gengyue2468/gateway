@@ -48,7 +48,7 @@ run_renderer \
     --config /tests/fixtures/valid-routes.yaml \
     --edge-output /tmp/gateway-tests/edge.Caddyfile \
     --origin-output /tmp/gateway-tests/backend.caddy
-if ! grep -F 'reverse_proxy 127.0.0.1:8080' "$tmp_dir/edge.Caddyfile" >/dev/null \
+if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'redir "https://your-domain.example{uri}" 302' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F 'rewrite * "/new{uri}"' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F 'meta http-equiv=\"refresh\"' "$tmp_dir/backend.caddy" >/dev/null; then

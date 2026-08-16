@@ -70,7 +70,7 @@
         "bypass_anubis": {
           "type": "boolean",
           "default": false,
-          "description": "Send this path directly from edge Caddy to backend Caddy, retaining the backend WAF. Requires a path and cache: false when cache is specified."
+          "description": "Send this path directly from edge Caddy to the declared upstream, bypassing Anubis and backend WAF. Requires a path and cache: false when cache is specified."
         },
         "cache": {
           "type": "boolean",

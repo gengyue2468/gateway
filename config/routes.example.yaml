@@ -2,8 +2,8 @@
 version: 1
 
 ingress:
-  # WebSocket paths that cannot pass through Anubis can bypass only the
-  # challenge proxy while still using backend Caddy and Coraza WAF.
+  # WebSocket paths that cannot pass through the challenge or WAF can bypass
+  # both layers and go directly from edge Caddy to the declared upstream.
   - hostname: terminal.your-domain.example
     path: ^/tty(/.*)?$
     service: https://origin.example.com

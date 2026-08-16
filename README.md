@@ -33,7 +33,7 @@ Routes may use these actions in addition to `service`:
 - `redirect: https://example.com{uri}` emits a normal HTTP 302; no status field is needed.
 - `rewrite: /new{uri}` changes the request URI internally before proxying and requires `service`.
 - `meta_redirect: https://example.com/` emits a browser-only 200 HTML meta refresh. Do not use it for HTTP-to-HTTPS or WebSocket traffic.
-- `bypass_anubis: true` sends a path directly from edge Caddy to backend Caddy while retaining the backend WAF. It requires `path` and `cache: false`.
+- `bypass_anubis: true` sends a path directly from edge Caddy to the declared upstream, bypassing Anubis and backend WAF. It requires `path` and `cache: false`.
 
 The default Caddy HTTP-to-HTTPS redirect and WebSocket upgrades remain native protocol responses; they are not HTML redirects.
 

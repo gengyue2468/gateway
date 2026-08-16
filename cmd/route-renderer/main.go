@@ -445,18 +445,22 @@ func renderEdge(cfg Config) string {
 			continue
 		}
 		fmt.Fprintf(&b, "    handle @bypass%d {\n", index)
-		renderEdgeProxy(&b, "        ", "127.0.0.1:8080")
+		renderEdgeProxy(&b, "        ", route.Service)
 		b.WriteString("    }\n")
 	}
 	b.WriteString("    handle {\n")
-	renderEdgeProxy(&b, "        ", "127.0.0.1:8923")
+	renderEdgeProxy(&b, "        ", ServiceList{"127.0.0.1:8923"})
 	b.WriteString("    }\n")
 	b.WriteString("}\n")
 	return b.String()
 }
 
-func renderEdgeProxy(b *strings.Builder, indent string, upstream string) {
-	fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, upstream)
+func renderEdgeProxy(b *strings.Builder, indent string, services ServiceList) {
+	fmt.Fprintf(b, "%sreverse_proxy", indent)
+	for _, service := range services {
+		fmt.Fprintf(b, " %s", service)
+	}
+	b.WriteString(" {\n")
 	fmt.Fprintf(b, "%s    header_up X-Forwarded-For {remote_host}\n", indent)
 	fmt.Fprintf(b, "%s    header_up X-Real-IP {remote_host}\n", indent)
 	fmt.Fprintf(b, "%s    header_up X-Http-Version {http.request.proto}\n", indent)
