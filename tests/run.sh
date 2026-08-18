@@ -109,6 +109,14 @@ if grep -F 'handle @route0' "$tmp_dir/backend.caddy" >/dev/null; then
 	printf 'not ok - Anubis bypass route was rendered into the backend\n' >&2
 	exit 1
 fi
+if ! awk '
+    /^    handle @bypass0 \{/ { bypass = NR }
+    /^    route \{/ { route = NR }
+    END { exit !(bypass > 0 && route > 0 && bypass < route) }
+' "$tmp_dir/edge.Caddyfile"; then
+	printf 'not ok - Anubis bypass was not placed before the edge WAF\n' >&2
+	exit 1
+fi
 pass "rewrite, redirect, meta redirect, and Anubis bypass render"
 
 run_renderer \

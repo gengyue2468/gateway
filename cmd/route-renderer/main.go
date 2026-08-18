@@ -550,19 +550,19 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 		}
 		b.WriteString("    }\n")
 	}
-	b.WriteString("    route {\n")
-	renderWAF(&b, "        ")
 	for index, route := range cfg.Ingress {
 		if route.isCatchAll() || !route.BypassAnubis {
 			continue
 		}
-		fmt.Fprintf(&b, "        handle @bypass%d {\n", index)
+		fmt.Fprintf(&b, "    handle @bypass%d {\n", index)
 		if route.RateLimit != nil {
-			renderRateLimit(&b, "            ", *route.RateLimit)
+			renderRateLimit(&b, "        ", *route.RateLimit)
 		}
-		renderEdgeProxy(&b, "            ", route.Service)
-		b.WriteString("        }\n")
+		renderEdgeProxy(&b, "        ", route.Service)
+		b.WriteString("    }\n")
 	}
+	b.WriteString("    route {\n")
+	renderWAF(&b, "        ")
 	b.WriteString("        handle {\n")
 	renderEdgeProxy(&b, "            ", ServiceList{"127.0.0.1:8923"})
 	b.WriteString("        }\n")
