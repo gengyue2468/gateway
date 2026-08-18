@@ -602,7 +602,6 @@ func renderEdgeProxy(b *strings.Builder, indent string, services ServiceList) {
 		fmt.Fprintf(b, " %s", service)
 	}
 	b.WriteString(" {\n")
-	fmt.Fprintf(b, "%s    header_up Host {http.request.host}\n", indent)
 	fmt.Fprintf(b, "%s    header_up X-Forwarded-For {http.request.remote.host}\n", indent)
 	fmt.Fprintf(b, "%s    header_up X-Real-IP {http.request.remote.host}\n", indent)
 	fmt.Fprintf(b, "%s    header_up X-Client-IP {http.request.remote.host}\n", indent)

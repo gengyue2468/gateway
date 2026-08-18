@@ -76,7 +76,6 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
     || ! grep -F 'max_cacheable_body_bytes 1048576' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F '                hide' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -Fx '            health_uri /' "$tmp_dir/backend.caddy" >/dev/null \
-    || ! grep -F 'header_up Host {http.request.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'header_up X-Forwarded-For {http.request.remote.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'header_up X-Real-IP {http.request.remote.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'header_up X-Client-IP {http.request.remote.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \

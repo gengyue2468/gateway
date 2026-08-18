@@ -94,8 +94,9 @@ protobuf endpoint prefix; the rest of CRS remains active there.
 Every edge proxy overwrites the canonical client context headers before
 forwarding: `X-Real-IP`, `X-Client-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`,
 `X-Forwarded-Host`, `X-Forwarded-Port`, `X-Forwarded-Uri`, and
-`X-Forwarded-Method`. The edge also preserves the public `Host`, original URI,
-and HTTP version. Umami can use the client IP for its own GeoIP lookup; the
+`X-Forwarded-Method`. Caddy's default upstream Host/SNI pairing is preserved,
+along with the original URI and HTTP version. Umami can use the client IP for
+its own GeoIP lookup; the
 gateway does not invent or trust spoofable `CF-IPCountry` headers because these
 domains connect directly to the VPS rather than through Cloudflare proxying.
 
