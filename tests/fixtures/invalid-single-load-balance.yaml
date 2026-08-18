@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - hostname: example.your-domain.example
+    path: ^/single$
+    service: https://origin.example.com
+    load_balance: round_robin
+  - service: http_status:444

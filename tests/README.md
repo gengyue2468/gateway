@@ -7,8 +7,26 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml build
 tests/run.sh
 ```
 
+`tests/run.sh` validates the YAML fixtures with `scripts/validate-schema.py` and
+validates generated edge and backend Caddyfiles, including
+`valid-bypass-options.yaml` and `cache-safety.yaml`, with the image's Caddy
+2.11.4. The host needs `jsonschema==4.19.2` and `PyYAML==6.0.2` (source CI
+installs these pinned versions).
+
+The cache checks cover generated matcher ordering, request exclusions, response
+`Set-Cookie` protection, and Caddy configuration syntax. They do not assert live
+HTTP cache hits or upstream response behavior in the offline suite.
+
 Run the live hot-reload check only during a maintenance window:
 
 ```sh
 RUN_LIVE=1 tests/run.sh
+```
+
+Run the isolated cache safety check when Docker and curl are available. It uses
+temporary containers and verifies that a response carrying `Set-Cookie` plus a
+surrogate cache directive is not served from the shared cache:
+
+```sh
+RUN_CACHE_LIVE=1 tests/run.sh
 ```

@@ -13,6 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # Keep clean-checkout Compose builds independent of a developer .env file.
+    env:
+      ACME_EMAIL: admin@example.com
+      CF_API_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN: _acme-challenge.cdnno.de
+      ANUBIS_DIFFICULTY: "4"
+      ANUBIS_COOKIE_EXPIRATION_TIME: 24h
+      GATEWAY_IMAGE: gateway:local
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -22,6 +30,18 @@ jobs:
         with:
           go-version-file: cmd/route-renderer/go.mod
 
+      - name: Prepare Compose validation secret
+        run: |
+          mkdir -p secrets deploy/secrets
+          openssl rand -hex 32 > secrets/anubis_ed25519
+          cp secrets/anubis_ed25519 deploy/secrets/anubis_ed25519
+
+      - name: Install schema validation dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check --user \
+            'jsonschema==4.19.2' \
+            'PyYAML==6.0.2'
+
       - name: Build route renderer
         working-directory: cmd/route-renderer
         run: go build -trimpath -o /tmp/route-renderer .
@@ -30,6 +50,17 @@ jobs:
         run: |
           /tmp/route-renderer --config tests/fixtures/valid-routes.yaml --check
           /tmp/route-renderer --config tests/fixtures/empty-routes.yaml --check
+          /tmp/route-renderer --config tests/fixtures/cache-safety.yaml --check
+
+      - name: Validate route schema
+        run: |
+          python3 scripts/validate-schema.py \
+            config/routes.schema.json \
+            tests/fixtures/valid-routes.yaml \
+            tests/fixtures/empty-routes.yaml \
+            tests/fixtures/path-only-backend.yaml \
+            tests/fixtures/cache-safety.yaml \
+            tests/fixtures/valid-bypass-options.yaml
 
       - name: Check shell scripts
         run: |
@@ -38,12 +69,10 @@ jobs:
           sh -n deploy/install.sh
           sh -n tests/run.sh
           sh -n tests/hot-reload.sh
+          sh -n tests/cache-live.sh
 
-      - name: Prepare Compose validation secret
-        run: |
-          mkdir -p secrets deploy/secrets
-          openssl rand -hex 32 > secrets/anubis_ed25519
-          cp secrets/anubis_ed25519 deploy/secrets/anubis_ed25519
+      - name: Build full gateway image
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml build gateway
 
       - name: Validate Compose files
         env:
@@ -53,3 +82,6 @@ jobs:
           docker compose -f docker-compose.yml config --quiet
           docker compose -f deploy/docker-compose.yml config --quiet
           cmp -s docker-compose.yml deploy/docker-compose.yml
+
+      - name: Run complete offline test suite
+        run: tests/run.sh

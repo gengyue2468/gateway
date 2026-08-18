@@ -23,6 +23,7 @@ ingress:
     meta_redirect: https://your-domain.example/
   - hostname: your-domain.example
     service: https://origin.example.com
+    cache: true
     health:
       uri: /
   - hostname: api.your-domain.example

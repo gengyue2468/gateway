@@ -1,0 +1,9 @@
+version: 1
+ingress:
+  - hostname: old.your-domain.example
+    redirect: https://new.example.com/
+    rate_limit:
+      name: redirect_limit
+      window: 1m
+      events: 10
+  - service: http_status:444

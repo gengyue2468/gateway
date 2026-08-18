@@ -3,8 +3,9 @@ version: 1
 
 ingress:
   # WebSocket paths that cannot pass through Anubis can bypass the challenge
-  # and go directly from edge Caddy to the declared upstream. Edge Coraza and
-  # the route rate limit still run before this proxy.
+  # and edge Coraza/WAF, going directly from edge Caddy to the declared
+  # upstream. The route rate limit still runs before this proxy. Bypass routes
+  # may also use rewrite, load_balance, and an explicit health configuration.
   - hostname: terminal.your-domain.example
     path: ^/tty(/.*)?$
     service: https://origin.example.com
@@ -35,8 +36,15 @@ ingress:
 
   - hostname: your-domain.example
     service: https://origin.example.com
+    # Cache is opt-in and is only safe for public responses.
+    cache: true
     health:
       uri: /
+
+  # A route without hostname is backend-only. It is evaluated by the origin
+  # Caddy after Anubis and cannot use bypass_anubis.
+  - path: ^/backend-only(/.*)?$
+    service: https://origin.example.com
 
   # Set active: false when the upstream has no health endpoint.
   - hostname: shortlinks.your-domain.example

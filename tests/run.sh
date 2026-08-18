@@ -40,6 +40,18 @@ run_renderer() {
 docker image inspect "$image" >/dev/null
 pass "gateway image is available"
 
+validate_schema() {
+    python3 "$repo_dir/scripts/validate-schema.py" "$repo_dir/config/routes.schema.json" "$@"
+}
+
+validate_schema \
+    "$repo_dir/tests/fixtures/valid-routes.yaml" \
+    "$repo_dir/tests/fixtures/empty-routes.yaml" \
+    "$repo_dir/tests/fixtures/path-only-backend.yaml" \
+    "$repo_dir/tests/fixtures/cache-safety.yaml" \
+    "$repo_dir/tests/fixtures/valid-bypass-options.yaml"
+pass "route fixtures pass JSON schema validation"
+
 run_renderer --config /tests/fixtures/valid-routes.yaml --check
 pass "valid routes pass validation"
 
@@ -72,6 +84,7 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
 	|| ! grep -F 'dns_challenge_override_domain "_acme-challenge.cdnno.de"' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F 'issuer acme' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F 'ttl 4h' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'mode strict' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'default_cache_control "public, max-age=14400"' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F 'max_cacheable_body_bytes 1048576' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F '                hide' "$tmp_dir/backend.caddy" >/dev/null \
@@ -85,14 +98,23 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
     || ! grep -F 'header_up X-Forwarded-Uri {http.request.uri}' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'header_up X-Forwarded-Method {http.request.method}' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'header_up X-Original-URI {http.request.uri}' "$tmp_dir/edge.Caddyfile" >/dev/null \
-    || ! grep -F 'rate_limit {' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F 'rate_limit {' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'zone terminal_per_client {' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F -A3 'path_regexp bypass0' "$tmp_dir/edge.Caddyfile" | grep -F 'method GET' >/dev/null \
     || ! grep -F 'method GET' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'ipv6_prefix 64' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F 'redir "https://your-domain.example{uri}" 302' "$tmp_dir/backend.caddy" >/dev/null \
-    || ! grep -F 'rewrite * "/new{uri}"' "$tmp_dir/backend.caddy" >/dev/null \
-    || ! grep -F 'meta http-equiv=\"refresh\"' "$tmp_dir/backend.caddy" >/dev/null; then
+	|| ! grep -F 'rewrite * "/new{uri}"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'meta http-equiv=\"refresh\"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'not header Cookie *' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'not header Authorization *' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'not path /api /api/* /login* /logout* /admin* /healthz /healthz/*' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'header Set-Cookie *' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'header >Cache-Control "no-store"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'header >Souin-Cache-Control "no-store"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'header >Surrogate-Control "no-store"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'header >CDN-Cache-Control "no-store"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'copy_response' "$tmp_dir/backend.caddy" >/dev/null; then
 	printf 'not ok - edge WAF, rewrite, redirect, meta redirect, or Anubis bypass was not rendered\n' >&2
 	exit 1
 fi
@@ -117,7 +139,65 @@ if ! awk '
 	printf 'not ok - Anubis bypass was not placed before the edge WAF\n' >&2
 	exit 1
 fi
+if ! grep -F '# @bypass0 intentionally bypasses Anubis and edge Coraza' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'request_header X-Original-URI {http.request.uri}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Original-URI {http.request.header.X-Original-URI}' "$tmp_dir/edge.Caddyfile" >/dev/null; then
+	printf 'not ok - bypass WAF boundary was not documented in generated config\n' >&2
+	exit 1
+fi
+if grep -E '(^|[[:space:]])(header_up|request_header)[[:space:]].*(-Cookie|Cookie)' "$tmp_dir/backend.caddy" >/dev/null; then
+	printf 'not ok - cache configuration strips or rewrites cookies\n' >&2
+	exit 1
+fi
+if grep -F 'redir "https://your-domain.example{uri}" 302' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || grep -F 'meta http-equiv="refresh"' "$tmp_dir/edge.Caddyfile" >/dev/null; then
+	printf 'not ok - backend redirects moved ahead of Anubis\n' >&2
+	exit 1
+fi
 pass "rewrite, redirect, meta redirect, and Anubis bypass render"
+
+run_renderer \
+    --config /tests/fixtures/valid-bypass-options.yaml \
+    --edge-output /tmp/gateway-tests/bypass-options-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/bypass-options-backend.caddy
+if ! grep -F 'rewrite * "/internal{uri}"' "$tmp_dir/bypass-options-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'lb_policy round_robin' "$tmp_dir/bypass-options-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'health_uri /readyz' "$tmp_dir/bypass-options-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'health_interval 15s' "$tmp_dir/bypass-options-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'health_timeout 2s' "$tmp_dir/bypass-options-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'lb_try_duration 4s' "$tmp_dir/bypass-options-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Forwarded-For {http.request.remote.host}' "$tmp_dir/bypass-options-edge.Caddyfile" >/dev/null; then
+    printf 'not ok - bypass rewrite, load balancing, health, or headers were dropped\n' >&2
+    exit 1
+fi
+if grep -F 'rewrite * "/internal{uri}"' "$tmp_dir/bypass-options-backend.caddy" >/dev/null; then
+    printf 'not ok - bypass route was rendered into the backend\n' >&2
+    exit 1
+fi
+pass "bypass rewrite, load balancing, health, and original URI render"
+
+run_renderer \
+    --config /tests/fixtures/cache-safety.yaml \
+    --edge-output /tmp/gateway-tests/cache-safety-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/cache-safety-backend.caddy
+cache_line=$(grep -n -F 'cache @cacheable0 {' "$tmp_dir/cache-safety-backend.caddy" | cut -d: -f1)
+rewrite_line=$(grep -n -F 'rewrite * "/internal{uri}"' "$tmp_dir/cache-safety-backend.caddy" | cut -d: -f1)
+if [ -z "$cache_line" ] || [ -z "$rewrite_line" ] || [ "$cache_line" -ge "$rewrite_line" ]; then
+    printf 'not ok - cache matcher was evaluated after the rewrite\n' >&2
+    exit 1
+fi
+pass "cache matching uses the original URI before rewrite"
+
+run_renderer \
+    --config /tests/fixtures/path-only-backend.yaml \
+    --edge-output /tmp/gateway-tests/path-only-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/path-only-backend.caddy
+if grep -F 'backend-only.example' "$tmp_dir/path-only-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'path_regexp route0' "$tmp_dir/path-only-backend.caddy" >/dev/null; then
+    printf 'not ok - path-only backend route boundary was not preserved\n' >&2
+    exit 1
+fi
+pass "path-only routes remain explicit backend-only rules"
 
 run_renderer \
     --config /tests/fixtures/empty-routes.yaml \
@@ -151,6 +231,22 @@ validate_caddy_configs empty-routes.yaml
 pass "empty generated Caddy configurations validate"
 validate_caddy_configs no-active-health.yaml
 pass "no-active-health generated Caddy configuration validates"
+validate_caddy_configs valid-bypass-options.yaml
+pass "valid bypass options pass real Caddy validation"
+validate_caddy_configs cache-safety.yaml
+pass "cache safety generated Caddy configuration validates"
+
+if ! grep -F 'trusted_proxies static 127.0.0.1/32 ::1/128' "$repo_dir/config/caddy/Caddyfile" >/dev/null \
+    || ! grep -F 'trusted_proxies_strict' "$repo_dir/config/caddy/Caddyfile" >/dev/null \
+    || ! grep -F 'client_ip_headers X-Forwarded-For X-Real-IP X-Client-IP' "$repo_dir/config/caddy/Caddyfile" >/dev/null; then
+    printf 'not ok - backend trusted proxy configuration is incomplete\n' >&2
+    exit 1
+fi
+if grep -F 'private_ranges' "$repo_dir/config/caddy/Caddyfile" >/dev/null; then
+    printf 'not ok - backend trusts private proxy ranges\n' >&2
+    exit 1
+fi
+pass "backend trusts only strict loopback proxy headers"
 
 expect_failure "missing catch-all is rejected" \
     run_renderer --config /tests/fixtures/invalid-no-catchall.yaml --check
@@ -166,6 +262,22 @@ expect_failure "redirect cannot include an upstream" \
     run_renderer --config /tests/fixtures/invalid-action-service.yaml --check
 expect_failure "Anubis bypass requires a path" \
     run_renderer --config /tests/fixtures/invalid-bypass.yaml --check
+expect_failure "edge Anubis bypass requires a hostname" \
+    run_renderer --config /tests/fixtures/invalid-bypass-path-only.yaml --check
+expect_failure "Anubis bypass cannot enable cache" \
+    run_renderer --config /tests/fixtures/invalid-bypass-cache.yaml --check
+expect_failure "service route requires hostname or path" \
+    run_renderer --config /tests/fixtures/invalid-pathless-service.yaml --check
+expect_failure "load balancing requires multiple upstreams" \
+    run_renderer --config /tests/fixtures/invalid-single-load-balance.yaml --check
+expect_failure "mixed catch-all upstreams are rejected" \
+    run_renderer --config /tests/fixtures/invalid-mixed-catchall.yaml --check
+expect_failure "redirect cannot have a rate limit" \
+    run_renderer --config /tests/fixtures/invalid-redirect-rate-limit.yaml --check
+expect_failure "meta redirect cannot have a rate limit" \
+    run_renderer --config /tests/fixtures/invalid-meta-rate-limit.yaml --check
+expect_failure "catch-all cannot have route options" \
+    run_renderer --config /tests/fixtures/invalid-catchall-option.yaml --check
 expect_failure "rate limit requires an Anubis bypass" \
     run_renderer --config /tests/fixtures/invalid-rate-limit.yaml --check
 expect_failure "rate limit methods must be uppercase HTTP methods" \
@@ -178,6 +290,23 @@ expect_failure "invalid ACME override is rejected" \
         --entrypoint /usr/local/bin/route-renderer \
         -v "$repo_dir/tests/fixtures:/tests/fixtures:ro" \
         "$image" --config /tests/fixtures/empty-routes.yaml --check
+
+expect_failure "schema rejects unknown fields" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-unknown-field.yaml"
+expect_failure "schema rejects an edge bypass without hostname" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-bypass-path-only.yaml"
+expect_failure "schema rejects a service route without hostname or path" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-pathless-service.yaml"
+expect_failure "schema rejects load balancing with one upstream" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-single-load-balance.yaml"
+expect_failure "schema rejects mixed catch-all upstreams" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-mixed-catchall.yaml"
+expect_failure "schema rejects redirect rate limits" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-redirect-rate-limit.yaml"
+expect_failure "schema rejects meta redirect rate limits" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-meta-rate-limit.yaml"
+expect_failure "schema rejects catch-all options" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-catchall-option.yaml"
 
 docker run --rm \
     -e ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=cdnno.de \
@@ -229,6 +358,11 @@ pass "old production names are absent from tracked files"
 if [ "${RUN_LIVE:-0}" = 1 ]; then
     "$repo_dir/tests/hot-reload.sh"
     pass "live configuration hot reload"
+fi
+
+if [ "${RUN_CACHE_LIVE:-0}" = 1 ]; then
+    "$repo_dir/tests/cache-live.sh"
+    pass "live cache Set-Cookie safety"
 fi
 
 printf '%s tests passed\n' "$passed"

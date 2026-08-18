@@ -53,52 +53,93 @@ Routes may use these actions in addition to `service`:
 - `redirect: https://example.com{uri}` emits a normal HTTP 302; no status field is needed.
 - `rewrite: /new{uri}` changes the request URI internally before proxying and requires `service`.
 - `meta_redirect: https://example.com/` emits a browser-only 200 HTML meta refresh. Do not use it for HTTP-to-HTTPS or WebSocket traffic.
-- `bypass_anubis: true` sends a path directly from edge Caddy to the declared upstream, bypassing Anubis but still passing through edge Coraza and any route rate limit. It requires `path` and `cache: false`.
+- `bypass_anubis: true` sends a path directly from edge Caddy to the declared upstream, bypassing Anubis **and edge Coraza/WAF**. A configured route rate limit still applies. It requires `hostname` and `path`; bypass routes never use the cache, and `cache: true` is rejected. `rewrite`, `load_balance`, and explicit `health` settings are preserved on this edge route.
 
-The default Caddy HTTP-to-HTTPS redirect and WebSocket upgrades remain native protocol responses; they are not HTML redirects.
+Routes without `hostname` are intentional backend-only rules. They are evaluated
+by the origin Caddy after Anubis for any request that reaches it, and cannot use
+`bypass_anubis` because the edge site has no host to match. Keep at least one
+hostname route when the configuration is meant to serve public edge traffic.
+
+Route redirects remain in the backend Caddy configuration and therefore pass
+through the normal edge WAF and Anubis path. The edge's native HTTP-to-HTTPS
+redirect and WebSocket upgrades remain protocol responses; they are not HTML
+redirects.
 
 Proxy routes use active upstream health checks by default. Set
 `health.active: false` when an upstream intentionally has no health endpoint;
-the proxy will still forward requests without probing it.
+the proxy will still forward requests without probing it. For compatibility,
+an edge bypass route only adds active health checks when it has an explicit
+`health` block; an omitted block does not introduce a new probe for existing
+direct routes.
+
 
 ## Caching
 
-Normal proxy routes cache GET and HEAD responses by default. Requests with
-cookies, authorization, or WebSocket upgrades, plus API, login, admin, and
-health paths, bypass the cache. Explicit origin cache directives take
-precedence; when the origin sends no cache directive, the gateway uses
-`public, max-age=14400` with a four-hour storage TTL. Routes such as WebSocket
-endpoints can set `cache: false` explicitly.
+Shared caching is an explicit opt-in: a normal proxy route must set
+`cache: true`. The checked-in production `routes.yaml` is deny-all, and the
+example public homepage marks its intended cache behavior explicitly. This
+keeps an unreviewed route from becoming a shared cache by default.
+
+Opted-in routes cache only GET and HEAD requests without `Cookie`,
+`Authorization`, WebSocket upgrades, or login/admin/API/health paths. The
+original request path is tested before any route rewrite, including `/api`,
+`/api/`, their children, `/healthz`, and `/healthz/`. The gateway never removes
+`Cookie`; application session cookies remain isolated and any request carrying a
+cookie bypasses the shared cache.
+
+The bundled cache-handler v0.16/Souin 1.7.7 honors response `private`,
+`no-store`, and `Vary` (including separate keys for declared varying headers and
+no storage for `Vary: *`). It does not independently reject `Set-Cookie`, so
+the renderer adds a Caddy response matcher to opted-in reverse proxies: any
+`Set-Cookie` response is sent with deferred `Cache-Control: no-store` before
+cache-handler sees it. The cookie is still delivered to the client.
+
+When an opted-in origin sends no cache directive, the gateway uses
+`public, max-age=14400` with a four-hour storage TTL. Do not opt in a route whose
+response varies on a request header that is not declared in `Vary` or otherwise
+represented in the cache key. The offline suite validates generated Caddy
+configuration and renderer ordering; it does not claim live HTTP cache behavior
+without an upstream fixture.
 
 ## Rate Limiting
 
 Bypass routes may declare a per-client `rate_limit`. The renderer emits the
-optional Caddy rate-limit handler only for those routes; normal routes cannot
-use it accidentally. The default key is the connecting client address, and an
-IPv6 prefix can be configured to prevent address rotation from bypassing the
-limit. Set route-level `methods` to restrict which HTTP methods bypass Anubis;
-set rate-limit `methods` to restrict which methods consume the zone. Leave
-`OPTIONS` out of API quotas when CORS preflight should not consume the business
-request budget.
+optional Caddy rate-limit handler inside the direct edge handler; normal routes
+cannot use it accidentally. The default key is the connecting client address,
+and an IPv6 prefix can be configured to prevent address rotation from bypassing
+the limit. Set route-level `methods` to restrict which HTTP methods bypass
+Anubis; set rate-limit `methods` to restrict which methods consume the zone.
+Leave `OPTIONS` out of API quotas when CORS preflight should not consume the
+business request budget.
 
 ## Edge WAF
 
-The edge Caddy configuration runs Coraza with the bundled OWASP CRS before both
-Anubis and direct upstream bypass routes. This keeps a solved Anubis challenge
-from bypassing request inspection. Response-body inspection is disabled at the
-edge to avoid buffering and to preserve streaming behavior; request inspection,
-CRS anomaly scoring, and the configured overrides remain enabled. Memos
-gRPC-Web receives only two narrowly scoped protocol-rule exclusions for its
-protobuf endpoint prefix; the rest of CRS remains active there.
+The normal edge Caddy path runs Coraza with the bundled OWASP CRS before Anubis.
+Direct `bypass_anubis` handlers are deliberately ordered before that WAF and
+proxy straight to their declared upstream, so they bypass both Anubis and edge
+Coraza. This is retained for Komari/WebSocket-style routes and is an explicit
+security boundary, not an accidental WAF omission. Response-body inspection is
+disabled at the edge to avoid buffering and to preserve streaming behavior;
+request inspection, CRS anomaly scoring, and the configured overrides remain
+enabled for the normal path. Memos gRPC-Web receives only two narrowly scoped
+protocol-rule exclusions for its protobuf endpoint prefix; the rest of CRS
+remains active there.
 
 Every edge proxy overwrites the canonical client context headers before
 forwarding: `X-Real-IP`, `X-Client-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`,
 `X-Forwarded-Host`, `X-Forwarded-Port`, `X-Forwarded-Uri`, and
 `X-Forwarded-Method`. Caddy's default upstream Host/SNI pairing is preserved,
-along with the original URI and HTTP version. Umami can use the client IP for
-its own GeoIP lookup; the
+along with the original URI and HTTP version. For a bypass route with a rewrite,
+Caddy saves `X-Original-URI` before the rewrite and forwards that saved value;
+the rewritten URI cannot overwrite the original-URI contract. Umami can use the
+client IP for its GeoIP lookup; the
 gateway does not invent or trust spoofable `CF-IPCountry` headers because these
 domains connect directly to the VPS rather than through Cloudflare proxying.
+
+Backend Caddy trusts forwarded client-IP headers only when the direct peer is
+loopback (`127.0.0.1/32` or `::1/128`), which is the Anubis proxy in the
+container. It uses strict right-to-left parsing and does not trust private
+network ranges. Direct routes do not use this backend trust configuration.
 
 Anubis reads `ANUBIS_DIFFICULTY` from the deployment `.env` and passes it to
 the daemon as its default difficulty. Ordinary requests still receive a
@@ -109,6 +150,8 @@ preserving a graduated challenge pipeline.
 
 The authorization cookie defaults to 24 hours. Set
 `ANUBIS_COOKIE_EXPIRATION_TIME` to override the duration, for example `12h`.
+The cookie name is intentionally not copied into cache rules because Anubis
+does not treat it as a stable public API.
 
 ## Release From EOS
 

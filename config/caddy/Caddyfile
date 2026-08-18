@@ -1,6 +1,13 @@
 {
     admin 127.0.0.1:2020
     auto_https off
+
+    servers {
+        # Only the loopback Anubis proxy may supply client IP headers here.
+        trusted_proxies static 127.0.0.1/32 ::1/128
+        trusted_proxies_strict
+        client_ip_headers X-Forwarded-For X-Real-IP X-Client-IP
+    }
 }
 
 http://:8080 {

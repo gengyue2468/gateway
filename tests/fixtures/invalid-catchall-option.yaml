@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - service: http_status:444
+    rate_limit:
+      name: catchall_limit
+      window: 1m
+      events: 10

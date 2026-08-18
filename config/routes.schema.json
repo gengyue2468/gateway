@@ -32,7 +32,7 @@
         "path": {
           "type": "string",
           "minLength": 1,
-          "description": "RE2-compatible path regular expression."
+          "description": "RE2-compatible path regular expression. A route without hostname is backend-only and is not an edge bypass route."
         },
         "methods": {
           "type": "array",
@@ -80,12 +80,12 @@
         "bypass_anubis": {
           "type": "boolean",
           "default": false,
-          "description": "Send this path directly from edge Caddy to the declared upstream, bypassing Anubis but still passing through edge Coraza and any route rate limit. Requires a path and cache: false when cache is specified."
+          "description": "Send this path directly from edge Caddy to the declared upstream, bypassing Anubis and edge Coraza/WAF. A configured route rate limit still applies. Requires hostname and path; bypass routes always disable cache and reject cache: true. Rewrite, load_balance, and an explicit health block are rendered on the edge route; an omitted health block retains the legacy no-probe behavior for direct routes."
         },
         "cache": {
           "type": "boolean",
-          "default": true,
-          "description": "Enable the shared GET/HEAD cache for this route."
+          "default": false,
+          "description": "Explicitly opt into the shared GET/HEAD cache for this public route. Requests with any Cookie or Authorization header bypass the cache; application cookies are never stripped. The response must not vary on an unkeyed request header."
         },
         "load_balance": {
           "type": "string",
@@ -194,7 +194,14 @@
               { "required": ["service"] },
               { "required": ["rewrite"] },
               { "required": ["meta_redirect"] },
-              { "required": ["bypass_anubis"] }
+              {
+                "required": ["bypass_anubis"],
+                "properties": { "bypass_anubis": { "const": true } }
+              },
+              { "required": ["cache"] },
+              { "required": ["load_balance"] },
+              { "required": ["health"] },
+              { "required": ["rate_limit"] }
             ]
           }
         },
@@ -205,22 +212,129 @@
               { "required": ["service"] },
               { "required": ["rewrite"] },
               { "required": ["redirect"] },
-              { "required": ["bypass_anubis"] }
+              {
+                "required": ["bypass_anubis"],
+                "properties": { "bypass_anubis": { "const": true } }
+              },
+              { "required": ["cache"] },
+              { "required": ["load_balance"] },
+              { "required": ["health"] },
+              { "required": ["rate_limit"] }
             ]
           }
         }
       ],
       "allOf": [
         {
+          "anyOf": [
+            { "required": ["hostname"] },
+            { "required": ["path"] },
+            {
+              "required": ["service"],
+              "properties": { "service": { "const": "http_status:444" } }
+            },
+            {
+              "required": ["service"],
+              "properties": {
+                "service": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": { "const": "http_status:444" }
+                }
+              }
+            }
+          ]
+        },
+        {
           "if": { "required": ["rewrite"] },
           "then": { "required": ["service"] }
         },
         {
-          "if": { "required": ["bypass_anubis"] },
+          "if": { "required": ["rate_limit"] },
           "then": {
-            "required": ["service", "path"],
+            "required": ["bypass_anubis"],
+            "properties": { "bypass_anubis": { "const": true } }
+          }
+        },
+        {
+          "if": { "required": ["load_balance"] },
+          "then": {
             "properties": {
-              "cache": { "const": false }
+              "service": {
+                "type": "array",
+                "minItems": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["service"],
+            "properties": {
+              "service": {
+                "type": "array",
+                "contains": { "const": "http_status:444" }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "service": {
+                "maxItems": 1,
+                "items": { "const": "http_status:444" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["bypass_anubis"],
+            "properties": { "bypass_anubis": { "const": true } }
+          },
+          "then": {
+            "required": ["service", "hostname", "path"],
+            "properties": { "cache": { "const": false } }
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": ["service"],
+                "properties": { "service": { "const": "http_status:444" } }
+              },
+              {
+                "required": ["service"],
+                "properties": {
+                  "service": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": { "const": "http_status:444" }
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["hostname"] },
+                { "required": ["path"] },
+                { "required": ["methods"] },
+                { "required": ["redirect"] },
+                { "required": ["rewrite"] },
+                { "required": ["meta_redirect"] },
+                {
+                  "required": ["bypass_anubis"],
+                  "properties": { "bypass_anubis": { "const": true } }
+                },
+                { "required": ["cache"] },
+                { "required": ["load_balance"] },
+                { "required": ["health"] },
+                { "required": ["rate_limit"] }
+              ]
             }
           }
         }

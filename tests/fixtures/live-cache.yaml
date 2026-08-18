@@ -1,0 +1,9 @@
+version: 1
+ingress:
+  - hostname: cache-live.example
+    path: ^/$
+    service: http://origin:8080
+    cache: true
+    health:
+      active: false
+  - service: http_status:444

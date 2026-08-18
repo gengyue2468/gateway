@@ -1,0 +1,4 @@
+version: 1
+ingress:
+  - service: https://origin.example.com
+  - service: http_status:444

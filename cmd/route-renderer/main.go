@@ -221,6 +221,9 @@ func validateRoute(index int, route Route, isLast bool) error {
 	if err := validateHTTPMethods(prefix, "methods", route.Methods); err != nil {
 		return err
 	}
+	if route.isCatchAllService() && !route.isCatchAll() {
+		return fmt.Errorf("%s catch-all cannot have route options", prefix)
+	}
 	if route.Hostname == "" && route.Path == "" && !route.isCatchAll() {
 		return fmt.Errorf("%s must declare hostname or path", prefix)
 	}
@@ -251,7 +254,7 @@ func validateRoute(index int, route Route, isLast bool) error {
 		if err := validateRedirectTarget(route.Redirect); err != nil {
 			return fmt.Errorf("%s redirect: %w", prefix, err)
 		}
-		if len(route.Service) != 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis {
+		if len(route.Service) != 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis || route.RateLimit != nil {
 			return fmt.Errorf("%s redirect cannot have service or route options", prefix)
 		}
 		return nil
@@ -260,7 +263,7 @@ func validateRoute(index int, route Route, isLast bool) error {
 		if err := validateRedirectTarget(route.MetaRedirect); err != nil {
 			return fmt.Errorf("%s meta_redirect: %w", prefix, err)
 		}
-		if len(route.Service) != 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis {
+		if len(route.Service) != 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis || route.RateLimit != nil {
 			return fmt.Errorf("%s meta_redirect cannot have service or route options", prefix)
 		}
 		return nil
@@ -275,6 +278,9 @@ func validateRoute(index int, route Route, isLast bool) error {
 	}
 	if route.BypassAnubis && route.Path == "" {
 		return fmt.Errorf("%s bypass_anubis requires a path regexp", prefix)
+	}
+	if route.BypassAnubis && route.Hostname == "" {
+		return fmt.Errorf("%s bypass_anubis requires a hostname for an edge route", prefix)
 	}
 	if route.BypassAnubis && route.Cache != nil && *route.Cache {
 		return fmt.Errorf("%s bypass_anubis routes must set cache: false", prefix)
@@ -453,15 +459,25 @@ func balancedPlaceholders(value string) bool {
 	return strings.Count(value, "{") == strings.Count(value, "}")
 }
 
-func (r Route) isCatchAll() bool {
+func (r Route) isCatchAllService() bool {
 	return r.Hostname == "" && r.Path == "" && len(r.Service) == 1 && r.Service[0] == "http_status:444"
 }
 
+func (r Route) isCatchAll() bool {
+	return r.isCatchAllService() &&
+		len(r.Methods) == 0 &&
+		r.Redirect == "" &&
+		r.Rewrite == "" &&
+		r.MetaRedirect == "" &&
+		!r.BypassAnubis &&
+		r.Cache == nil &&
+		r.LoadBalance == "" &&
+		r.Health == nil &&
+		r.RateLimit == nil
+}
+
 func (r Route) cacheEnabled() bool {
-	if r.BypassAnubis {
-		return false
-	}
-	return r.Cache == nil || *r.Cache
+	return r.Cache != nil && *r.Cache
 }
 
 func (r Route) health() normalizedHealth {
@@ -554,11 +570,18 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 		if route.isCatchAll() || !route.BypassAnubis {
 			continue
 		}
+		fmt.Fprintf(&b, "    # @bypass%d intentionally bypasses Anubis and edge Coraza; route rate limits still apply.\n", index)
 		fmt.Fprintf(&b, "    handle @bypass%d {\n", index)
-		if route.RateLimit != nil {
-			renderRateLimit(&b, "        ", *route.RateLimit)
+		b.WriteString("        route {\n")
+		b.WriteString("            request_header X-Original-URI {http.request.uri}\n")
+		if route.Rewrite != "" {
+			fmt.Fprintf(&b, "            rewrite * %s\n", caddyQuote(route.Rewrite))
 		}
-		renderEdgeProxy(&b, "        ", route.Service)
+		if route.RateLimit != nil {
+			renderRateLimit(&b, "            ", *route.RateLimit)
+		}
+		renderEdgeProxyRoute(&b, "            ", route)
+		b.WriteString("        }\n")
 		b.WriteString("    }\n")
 	}
 	b.WriteString("    route {\n")
@@ -597,21 +620,64 @@ func renderRateLimit(b *strings.Builder, indent string, limit RateLimit) {
 }
 
 func renderEdgeProxy(b *strings.Builder, indent string, services ServiceList) {
+	renderReverseProxy(b, indent, services, "", nil, true, false, false, "")
+}
+
+func renderEdgeProxyRoute(b *strings.Builder, indent string, route Route) {
+	var health *normalizedHealth
+	if route.Health != nil {
+		normalized := route.health()
+		health = &normalized
+	}
+	renderReverseProxy(b, indent, route.Service, route.LoadBalance, health, true, false, true, "")
+}
+
+func renderReverseProxy(b *strings.Builder, indent string, services ServiceList, loadBalance string, health *normalizedHealth, edgeHeaders bool, streamCloseDelay bool, preserveOriginalURI bool, cacheResponseMatcher string) {
 	fmt.Fprintf(b, "%sreverse_proxy", indent)
 	for _, service := range services {
 		fmt.Fprintf(b, " %s", service)
 	}
 	b.WriteString(" {\n")
-	fmt.Fprintf(b, "%s    header_up X-Forwarded-For {http.request.remote.host}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Real-IP {http.request.remote.host}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Client-IP {http.request.remote.host}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Forwarded-Proto {http.request.scheme}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Forwarded-Host {http.request.host}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Forwarded-Port {http.request.port}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Forwarded-Uri {http.request.uri}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Forwarded-Method {http.request.method}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Original-URI {http.request.uri}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Http-Version {http.request.proto}\n", indent)
+	if edgeHeaders {
+		fmt.Fprintf(b, "%s    header_up X-Forwarded-For {http.request.remote.host}\n", indent)
+		fmt.Fprintf(b, "%s    header_up X-Real-IP {http.request.remote.host}\n", indent)
+		fmt.Fprintf(b, "%s    header_up X-Client-IP {http.request.remote.host}\n", indent)
+		fmt.Fprintf(b, "%s    header_up X-Forwarded-Proto {http.request.scheme}\n", indent)
+		fmt.Fprintf(b, "%s    header_up X-Forwarded-Host {http.request.host}\n", indent)
+		fmt.Fprintf(b, "%s    header_up X-Forwarded-Port {http.request.port}\n", indent)
+		fmt.Fprintf(b, "%s    header_up X-Forwarded-Uri {http.request.uri}\n", indent)
+		fmt.Fprintf(b, "%s    header_up X-Forwarded-Method {http.request.method}\n", indent)
+		if preserveOriginalURI {
+			fmt.Fprintf(b, "%s    header_up X-Original-URI {http.request.header.X-Original-URI}\n", indent)
+		} else {
+			fmt.Fprintf(b, "%s    header_up X-Original-URI {http.request.uri}\n", indent)
+		}
+		fmt.Fprintf(b, "%s    header_up X-Http-Version {http.request.proto}\n", indent)
+	}
+	if len(services) > 1 && loadBalance != "" {
+		fmt.Fprintf(b, "%s    lb_policy %s\n", indent, loadBalance)
+	}
+	if health != nil && health.Active {
+		fmt.Fprintf(b, "%s    health_uri %s\n", indent, health.URI)
+		fmt.Fprintf(b, "%s    health_interval %s\n", indent, health.Interval)
+		fmt.Fprintf(b, "%s    health_timeout %s\n", indent, health.Timeout)
+		fmt.Fprintf(b, "%s    lb_try_duration %s\n", indent, health.TryDuration)
+	}
+	if streamCloseDelay {
+		fmt.Fprintf(b, "%s    stream_close_delay 5m\n", indent)
+	}
+	if cacheResponseMatcher != "" {
+		fmt.Fprintf(b, "%s    @%s {\n", indent, cacheResponseMatcher)
+		fmt.Fprintf(b, "%s        header Set-Cookie *\n", indent)
+		fmt.Fprintf(b, "%s    }\n", indent)
+		fmt.Fprintf(b, "%s    handle_response @%s {\n", indent, cacheResponseMatcher)
+		fmt.Fprintf(b, "%s        header >Cache-Control \"no-store\"\n", indent)
+		fmt.Fprintf(b, "%s        header >Souin-Cache-Control \"no-store\"\n", indent)
+		fmt.Fprintf(b, "%s        header >Surrogate-Control \"no-store\"\n", indent)
+		fmt.Fprintf(b, "%s        header >CDN-Cache-Control \"no-store\"\n", indent)
+		fmt.Fprintf(b, "%s        copy_response\n", indent)
+		fmt.Fprintf(b, "%s    }\n", indent)
+	}
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 
@@ -639,12 +705,10 @@ func renderOrigin(cfg Config) string {
 			renderMetaRedirect(&b, "    ", route.MetaRedirect)
 		} else {
 			b.WriteString("    route {\n")
-			if route.Rewrite != "" {
-				fmt.Fprintf(&b, "        rewrite * %s\n", caddyQuote(route.Rewrite))
-			}
 			if route.cacheEnabled() {
 				fmt.Fprintf(&b, "        cache @cacheable%d {\n", index)
 				b.WriteString("            ttl 4h\n")
+				b.WriteString("            mode strict\n")
 				b.WriteString("            default_cache_control \"public, max-age=14400\"\n")
 				b.WriteString("            max_cacheable_body_bytes 1048576\n")
 				b.WriteString("            key {\n")
@@ -657,7 +721,10 @@ func renderOrigin(cfg Config) string {
 				b.WriteString("            }\n")
 				b.WriteString("        }\n")
 			}
-			renderProxy(&b, "        ", route)
+			if route.Rewrite != "" {
+				fmt.Fprintf(&b, "        rewrite * %s\n", caddyQuote(route.Rewrite))
+			}
+			renderProxy(&b, "        ", route, index)
 			b.WriteString("    }\n")
 		}
 		b.WriteString("}\n\n")
@@ -707,7 +774,7 @@ func renderCacheMatcher(b *strings.Builder, index int) {
 	b.WriteString("    not header Authorization *\n")
 	b.WriteString("    not header Connection *Upgrade*\n")
 	b.WriteString("    not header Upgrade websocket\n")
-	b.WriteString("    not path /api/* /login* /logout* /admin* /healthz\n")
+	b.WriteString("    not path /api /api/* /login* /logout* /admin* /healthz /healthz/*\n")
 	b.WriteString("}\n")
 }
 
@@ -725,24 +792,13 @@ func renderWAF(b *strings.Builder, indent string) {
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 
-func renderProxy(b *strings.Builder, indent string, route Route) {
-	fmt.Fprintf(b, "%sreverse_proxy", indent)
-	for _, service := range route.Service {
-		fmt.Fprintf(b, " %s", service)
-	}
-	b.WriteString(" {\n")
-	if len(route.Service) > 1 && route.LoadBalance != "" {
-		fmt.Fprintf(b, "%slb_policy %s\n", indent+"    ", route.LoadBalance)
-	}
+func renderProxy(b *strings.Builder, indent string, route Route, index int) {
 	health := route.health()
-	if health.Active {
-		fmt.Fprintf(b, "%shealth_uri %s\n", indent+"    ", health.URI)
-		fmt.Fprintf(b, "%shealth_interval %s\n", indent+"    ", health.Interval)
-		fmt.Fprintf(b, "%shealth_timeout %s\n", indent+"    ", health.Timeout)
-		fmt.Fprintf(b, "%slb_try_duration %s\n", indent+"    ", health.TryDuration)
+	matcher := ""
+	if route.cacheEnabled() {
+		matcher = fmt.Sprintf("cache_response_%d", index)
 	}
-	fmt.Fprintf(b, "%sstream_close_delay 5m\n", indent+"    ")
-	fmt.Fprintf(b, "%s}\n", indent)
+	renderReverseProxy(b, indent, route.Service, route.LoadBalance, &health, false, true, false, matcher)
 }
 
 func caddyQuote(value string) string {

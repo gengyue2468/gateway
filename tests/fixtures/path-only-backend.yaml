@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - path: ^/backend-only(/.*)?$
+    service: https://origin.example.com
+    cache: false
+    bypass_anubis: false
+  - service: http_status:444

@@ -1,0 +1,17 @@
+version: 1
+ingress:
+  - hostname: websocket.your-domain.example
+    path: ^/socket(/.*)?$
+    rewrite: /internal{uri}
+    service:
+      - https://socket-a.example.com
+      - https://socket-b.example.com
+    cache: false
+    bypass_anubis: true
+    load_balance: round_robin
+    health:
+      uri: /readyz
+      interval: 15s
+      timeout: 2s
+      try_duration: 4s
+  - service: http_status:444

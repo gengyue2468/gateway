@@ -1,0 +1,8 @@
+version: 1
+ingress:
+  - hostname: example.your-domain.example
+    path: ^/mixed$
+    service:
+      - http_status:444
+      - https://origin.example.com
+  - service: http_status:444

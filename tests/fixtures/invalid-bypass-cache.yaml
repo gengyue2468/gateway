@@ -1,0 +1,8 @@
+version: 1
+ingress:
+  - hostname: websocket.your-domain.example
+    path: ^/socket(/.*)?$
+    service: https://origin.example.com
+    cache: true
+    bypass_anubis: true
+  - service: http_status:444
