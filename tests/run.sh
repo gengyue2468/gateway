@@ -73,9 +73,19 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
 	|| ! grep -F 'issuer acme' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F 'ttl 4h' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'default_cache_control "public, max-age=14400"' "$tmp_dir/backend.caddy" >/dev/null \
-	|| ! grep -F 'max_cacheable_body_bytes 1048576' "$tmp_dir/backend.caddy" >/dev/null \
-	|| ! grep -F '                hide' "$tmp_dir/backend.caddy" >/dev/null \
-	|| ! grep -Fx '            health_uri /' "$tmp_dir/backend.caddy" >/dev/null \
+    || ! grep -F 'max_cacheable_body_bytes 1048576' "$tmp_dir/backend.caddy" >/dev/null \
+    || ! grep -F '                hide' "$tmp_dir/backend.caddy" >/dev/null \
+    || ! grep -Fx '            health_uri /' "$tmp_dir/backend.caddy" >/dev/null \
+    || ! grep -F 'header_up Host {http.request.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Forwarded-For {http.request.remote.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Real-IP {http.request.remote.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Client-IP {http.request.remote.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Forwarded-Proto {http.request.scheme}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Forwarded-Host {http.request.host}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Forwarded-Port {http.request.port}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Forwarded-Uri {http.request.uri}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Forwarded-Method {http.request.method}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'header_up X-Original-URI {http.request.uri}' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'rate_limit {' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'zone terminal_per_client {' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F -A3 'path_regexp bypass0' "$tmp_dir/edge.Caddyfile" | grep -F 'method GET' >/dev/null \

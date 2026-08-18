@@ -602,8 +602,16 @@ func renderEdgeProxy(b *strings.Builder, indent string, services ServiceList) {
 		fmt.Fprintf(b, " %s", service)
 	}
 	b.WriteString(" {\n")
-	fmt.Fprintf(b, "%s    header_up X-Forwarded-For {remote_host}\n", indent)
-	fmt.Fprintf(b, "%s    header_up X-Real-IP {remote_host}\n", indent)
+	fmt.Fprintf(b, "%s    header_up Host {http.request.host}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Forwarded-For {http.request.remote.host}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Real-IP {http.request.remote.host}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Client-IP {http.request.remote.host}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Forwarded-Proto {http.request.scheme}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Forwarded-Host {http.request.host}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Forwarded-Port {http.request.port}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Forwarded-Uri {http.request.uri}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Forwarded-Method {http.request.method}\n", indent)
+	fmt.Fprintf(b, "%s    header_up X-Original-URI {http.request.uri}\n", indent)
 	fmt.Fprintf(b, "%s    header_up X-Http-Version {http.request.proto}\n", indent)
 	fmt.Fprintf(b, "%s}\n", indent)
 }

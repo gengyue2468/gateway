@@ -91,6 +91,14 @@ CRS anomaly scoring, and the configured overrides remain enabled. Memos
 gRPC-Web receives only two narrowly scoped protocol-rule exclusions for its
 protobuf endpoint prefix; the rest of CRS remains active there.
 
+Every edge proxy overwrites the canonical client context headers before
+forwarding: `X-Real-IP`, `X-Client-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`,
+`X-Forwarded-Host`, `X-Forwarded-Port`, `X-Forwarded-Uri`, and
+`X-Forwarded-Method`. The edge also preserves the public `Host`, original URI,
+and HTTP version. Umami can use the client IP for its own GeoIP lookup; the
+gateway does not invent or trust spoofable `CF-IPCountry` headers because these
+domains connect directly to the VPS rather than through Cloudflare proxying.
+
 Anubis reads `ANUBIS_DIFFICULTY` from the deployment `.env` and passes it to
 the daemon as its default difficulty. Ordinary requests still receive a
 challenge at this base difficulty; successive risk tiers use base plus one,
