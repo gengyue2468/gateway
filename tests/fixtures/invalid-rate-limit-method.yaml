@@ -1,0 +1,13 @@
+version: 1
+ingress:
+  - hostname: example.com
+    path: ^/api$
+    service: https://origin.example.com
+    cache: false
+    bypass_anubis: true
+    rate_limit:
+      name: invalid_method
+      window: 1m
+      events: 10
+      methods: [get]
+  - service: http_status:444

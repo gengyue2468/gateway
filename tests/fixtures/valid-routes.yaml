@@ -4,7 +4,15 @@ ingress:
     path: ^/tty(/.*)?$
     service: https://origin.example.com
     cache: false
+    methods: [GET]
     bypass_anubis: true
+    rate_limit:
+      name: terminal_per_client
+      key: "{remote_host}"
+      window: 1m
+      events: 60
+      methods: [GET]
+      ipv6_prefix: 64
   - hostname: old.your-domain.example
     redirect: https://your-domain.example{uri}
   - hostname: your-domain.example

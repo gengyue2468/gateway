@@ -2,13 +2,22 @@
 version: 1
 
 ingress:
-  # WebSocket paths that cannot pass through the challenge or WAF can bypass
-  # both layers and go directly from edge Caddy to the declared upstream.
+  # WebSocket paths that cannot pass through Anubis can bypass the challenge
+  # and go directly from edge Caddy to the declared upstream. Edge Coraza and
+  # the route rate limit still run before this proxy.
   - hostname: terminal.your-domain.example
     path: ^/tty(/.*)?$
     service: https://origin.example.com
     cache: false
+    methods: [GET]
     bypass_anubis: true
+    rate_limit:
+      name: terminal_per_client
+      key: "{remote_host}"
+      window: 1m
+      events: 60
+      methods: [GET]
+      ipv6_prefix: 64
 
   # redirect is a normal HTTP 302; no status field is needed.
   - hostname: old.your-domain.example
@@ -28,5 +37,11 @@ ingress:
     service: https://origin.example.com
     health:
       uri: /
+
+  # Set active: false when the upstream has no health endpoint.
+  - hostname: shortlinks.your-domain.example
+    service: https://shortlinks.example.com
+    health:
+      active: false
 
   - service: http_status:444

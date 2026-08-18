@@ -47,18 +47,58 @@ run_renderer --config /tests/fixtures/empty-routes.yaml --check
 pass "empty deny-all routes pass validation"
 
 run_renderer \
+    --config /tests/fixtures/no-active-health.yaml \
+    --edge-output /tmp/gateway-tests/no-active-health-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/no-active-health-backend.caddy
+if grep -F 'health_uri' "$tmp_dir/no-active-health-backend.caddy" >/dev/null \
+    || grep -F 'lb_try_duration' "$tmp_dir/no-active-health-backend.caddy" >/dev/null; then
+    printf 'not ok - active health checks were not disabled\n' >&2
+    exit 1
+fi
+pass "active health checks can be disabled"
+
+run_renderer \
     --config /tests/fixtures/valid-routes.yaml \
     --edge-output /tmp/gateway-tests/edge.Caddyfile \
     --origin-output /tmp/gateway-tests/backend.caddy
 if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'order coraza_waf first' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'coraza_waf {' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'SecResponseBodyAccess Off' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'encode zstd gzip' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F '0rtt off' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'read_header 10s' "$tmp_dir/edge.Caddyfile" >/dev/null \
     || ! grep -F 'issuer acme {' "$tmp_dir/edge.Caddyfile" >/dev/null \
-    || ! grep -F 'dns_challenge_override_domain "_acme-challenge.cdnno.de"' "$tmp_dir/edge.Caddyfile" >/dev/null \
-    || ! grep -F 'issuer acme' "$tmp_dir/edge.Caddyfile" >/dev/null \
-    || ! grep -F 'redir "https://your-domain.example{uri}" 302' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'dns_challenge_override_domain "_acme-challenge.cdnno.de"' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F 'issuer acme' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F 'ttl 4h' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'default_cache_control "public, max-age=14400"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'max_cacheable_body_bytes 1048576' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F '                hide' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -Fx '            health_uri /' "$tmp_dir/backend.caddy" >/dev/null \
+    || ! grep -F 'rate_limit {' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'zone terminal_per_client {' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F -A3 'path_regexp bypass0' "$tmp_dir/edge.Caddyfile" | grep -F 'method GET' >/dev/null \
+    || ! grep -F 'method GET' "$tmp_dir/edge.Caddyfile" >/dev/null \
+    || ! grep -F 'ipv6_prefix 64' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F 'redir "https://your-domain.example{uri}" 302' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F 'rewrite * "/new{uri}"' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F 'meta http-equiv=\"refresh\"' "$tmp_dir/backend.caddy" >/dev/null; then
-    printf 'not ok - rewrite, redirect, meta redirect, or Anubis bypass was not rendered\n' >&2
+	printf 'not ok - edge WAF, rewrite, redirect, meta redirect, or Anubis bypass was not rendered\n' >&2
+	exit 1
+fi
+if grep -F 'coraza_waf {' "$tmp_dir/backend.caddy" >/dev/null; then
+	printf 'not ok - Coraza was still rendered into the backend\n' >&2
+	exit 1
+fi
+if ! grep -F 'ctl:ruleRemoveById=920420' "$repo_dir/config/caddy/waf/overrides.conf" >/dev/null \
+    || ! grep -F 'ctl:ruleRemoveById=921150' "$repo_dir/config/caddy/waf/overrides.conf" >/dev/null; then
+    printf 'not ok - scoped Memos gRPC WAF overrides are missing\n' >&2
     exit 1
+fi
+if grep -F 'handle @route0' "$tmp_dir/backend.caddy" >/dev/null; then
+	printf 'not ok - Anubis bypass route was rendered into the backend\n' >&2
+	exit 1
 fi
 pass "rewrite, redirect, meta redirect, and Anubis bypass render"
 
@@ -92,6 +132,8 @@ validate_caddy_configs valid-routes.yaml
 pass "valid generated Caddy configurations validate"
 validate_caddy_configs empty-routes.yaml
 pass "empty generated Caddy configurations validate"
+validate_caddy_configs no-active-health.yaml
+pass "no-active-health generated Caddy configuration validates"
 
 expect_failure "missing catch-all is rejected" \
     run_renderer --config /tests/fixtures/invalid-no-catchall.yaml --check
@@ -107,12 +149,33 @@ expect_failure "redirect cannot include an upstream" \
     run_renderer --config /tests/fixtures/invalid-action-service.yaml --check
 expect_failure "Anubis bypass requires a path" \
     run_renderer --config /tests/fixtures/invalid-bypass.yaml --check
+expect_failure "rate limit requires an Anubis bypass" \
+    run_renderer --config /tests/fixtures/invalid-rate-limit.yaml --check
+expect_failure "rate limit methods must be uppercase HTTP methods" \
+    run_renderer --config /tests/fixtures/invalid-rate-limit-method.yaml --check
+expect_failure "route methods must be uppercase HTTP methods" \
+    run_renderer --config /tests/fixtures/invalid-route-method.yaml --check
 expect_failure "invalid ACME override is rejected" \
     docker run --rm \
-        -e ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=cdnno.de \
+        -e ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=not_a_dns_name \
         --entrypoint /usr/local/bin/route-renderer \
         -v "$repo_dir/tests/fixtures:/tests/fixtures:ro" \
         "$image" --config /tests/fixtures/empty-routes.yaml --check
+
+docker run --rm \
+    -e ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=cdnno.de \
+    --entrypoint /usr/local/bin/route-renderer \
+    -v "$repo_dir/tests/fixtures:/tests/fixtures:ro" \
+    -v "$tmp_dir:/tmp/gateway-tests" \
+    "$image" \
+    --config /tests/fixtures/valid-routes.yaml \
+    --edge-output /tmp/gateway-tests/root-override.Caddyfile \
+    --origin-output /tmp/gateway-tests/root-override-backend.caddy
+if ! grep -F 'dns_challenge_override_domain "cdnno.de"' "$tmp_dir/root-override.Caddyfile" >/dev/null; then
+    printf 'not ok - root CNAME ACME override was not rendered\n' >&2
+    exit 1
+fi
+pass "root CNAME ACME override renders"
 
 sh -n "$repo_dir/docker/gateway/entrypoint.sh"
 pass "gateway entrypoint passes shell syntax check"
@@ -121,6 +184,7 @@ ACME_EMAIL=admin@example.com \
 CF_API_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
 ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=_acme-challenge.cdnno.de \
 ANUBIS_DIFFICULTY=4 \
+ANUBIS_COOKIE_EXPIRATION_TIME=24h \
 docker compose --project-directory "$repo_dir" \
     -f "$repo_dir/docker-compose.yml" config --quiet
 pass "production Compose configuration is valid"

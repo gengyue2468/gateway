@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - hostname: example.com
+    path: ^/submit$
+    methods: [post]
+    service: https://origin.example.com
+  - service: http_status:444

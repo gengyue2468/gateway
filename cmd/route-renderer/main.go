@@ -31,6 +31,7 @@ type Config struct {
 type Route struct {
 	Hostname     string        `yaml:"hostname,omitempty"`
 	Path         string        `yaml:"path,omitempty"`
+	Methods      []string      `yaml:"methods,omitempty"`
 	Service      ServiceList   `yaml:"service,omitempty"`
 	Redirect     string        `yaml:"redirect,omitempty"`
 	Rewrite      string        `yaml:"rewrite,omitempty"`
@@ -39,6 +40,7 @@ type Route struct {
 	Cache        *bool         `yaml:"cache,omitempty"`
 	LoadBalance  string        `yaml:"load_balance,omitempty"`
 	Health       *HealthConfig `yaml:"health,omitempty"`
+	RateLimit    *RateLimit    `yaml:"rate_limit,omitempty"`
 }
 
 type ServiceList []string
@@ -67,6 +69,7 @@ func (s *ServiceList) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type HealthConfig struct {
+	Active      *bool  `yaml:"active,omitempty"`
 	URI         string `yaml:"uri,omitempty"`
 	Interval    string `yaml:"interval,omitempty"`
 	Timeout     string `yaml:"timeout,omitempty"`
@@ -74,14 +77,27 @@ type HealthConfig struct {
 }
 
 type normalizedHealth struct {
+	Active      bool
 	URI         string
 	Interval    string
 	Timeout     string
 	TryDuration string
 }
 
+type RateLimit struct {
+	Name       string   `yaml:"name"`
+	Key        string   `yaml:"key,omitempty"`
+	Window     string   `yaml:"window"`
+	Events     int      `yaml:"events"`
+	Methods    []string `yaml:"methods,omitempty"`
+	IPv4Prefix int      `yaml:"ipv4_prefix,omitempty"`
+	IPv6Prefix int      `yaml:"ipv6_prefix,omitempty"`
+}
+
 var hostnamePattern = regexp.MustCompile(`^(\*\.)?[A-Za-z0-9][A-Za-z0-9._:-]*$`)
-var acmeOverrideDomainPattern = regexp.MustCompile(`^_acme-challenge(\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+\.?$`)
+var acmeOverrideDomainPattern = regexp.MustCompile(`^(?:_acme-challenge\.)?(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.?$`)
+var rateLimitKeyPattern = regexp.MustCompile(`^\{(?:remote_host|http\.request\.remote\.host)\}$`)
+var rateLimitNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func main() {
 	configPath := flag.String("config", defaultConfig, "route YAML path")
@@ -117,7 +133,7 @@ func loadACMEOverrideDomain() (string, error) {
 		return "", nil
 	}
 	if !acmeOverrideDomainPattern.MatchString(value) {
-		return "", fmt.Errorf("ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN must be a full _acme-challenge DNS name, got %q", value)
+		return "", fmt.Errorf("ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN must be a DNS name, optionally prefixed with _acme-challenge, got %q", value)
 	}
 	return value, nil
 }
@@ -202,6 +218,9 @@ func validateRoute(index int, route Route, isLast bool) error {
 			return fmt.Errorf("%s has invalid path regexp: %w", prefix, err)
 		}
 	}
+	if err := validateHTTPMethods(prefix, "methods", route.Methods); err != nil {
+		return err
+	}
 	if route.Hostname == "" && route.Path == "" && !route.isCatchAll() {
 		return fmt.Errorf("%s must declare hostname or path", prefix)
 	}
@@ -209,7 +228,7 @@ func validateRoute(index int, route Route, isLast bool) error {
 		if !isLast {
 			return fmt.Errorf("%s catch-all must be the final rule", prefix)
 		}
-		if route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis {
+		if len(route.Methods) > 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis {
 			return fmt.Errorf("%s catch-all cannot have route options", prefix)
 		}
 		return nil
@@ -259,6 +278,36 @@ func validateRoute(index int, route Route, isLast bool) error {
 	}
 	if route.BypassAnubis && route.Cache != nil && *route.Cache {
 		return fmt.Errorf("%s bypass_anubis routes must set cache: false", prefix)
+	}
+	if route.RateLimit != nil {
+		if !route.BypassAnubis {
+			return fmt.Errorf("%s rate_limit requires bypass_anubis", prefix)
+		}
+		if !rateLimitNamePattern.MatchString(route.RateLimit.Name) {
+			return fmt.Errorf("%s rate_limit.name must contain only letters, digits, underscores, or hyphens", prefix)
+		}
+		key := route.RateLimit.Key
+		if key == "" {
+			key = "{remote_host}"
+		}
+		if !rateLimitKeyPattern.MatchString(key) {
+			return fmt.Errorf("%s rate_limit.key must be {remote_host} or {http.request.remote.host}", prefix)
+		}
+		if _, err := time.ParseDuration(route.RateLimit.Window); err != nil {
+			return fmt.Errorf("%s has invalid rate_limit.window: %w", prefix, err)
+		}
+		if route.RateLimit.Events < 1 {
+			return fmt.Errorf("%s rate_limit.events must be positive", prefix)
+		}
+		if err := validateHTTPMethods(prefix, "rate_limit.methods", route.RateLimit.Methods); err != nil {
+			return err
+		}
+		if route.RateLimit.IPv4Prefix < 0 || route.RateLimit.IPv4Prefix > 32 {
+			return fmt.Errorf("%s rate_limit.ipv4_prefix must be between 0 and 32", prefix)
+		}
+		if route.RateLimit.IPv6Prefix < 0 || route.RateLimit.IPv6Prefix > 128 {
+			return fmt.Errorf("%s rate_limit.ipv6_prefix must be between 0 and 128", prefix)
+		}
 	}
 	serviceScheme := ""
 	seenServices := make(map[string]struct{})
@@ -310,6 +359,32 @@ var validLoadBalancers = map[string]bool{
 	"ip_hash":        true,
 	"client_ip_hash": true,
 	"uri_hash":       true,
+}
+
+var validRateLimitMethods = map[string]bool{
+	"GET":     true,
+	"HEAD":    true,
+	"POST":    true,
+	"PUT":     true,
+	"PATCH":   true,
+	"DELETE":  true,
+	"OPTIONS": true,
+	"CONNECT": true,
+	"TRACE":   true,
+}
+
+func validateHTTPMethods(prefix string, field string, methods []string) error {
+	seen := make(map[string]struct{}, len(methods))
+	for _, method := range methods {
+		if !validRateLimitMethods[method] {
+			return fmt.Errorf("%s has unsupported %s value %q", prefix, field, method)
+		}
+		if _, ok := seen[method]; ok {
+			return fmt.Errorf("%s repeats %s value %q", prefix, field, method)
+		}
+		seen[method] = struct{}{}
+	}
+	return nil
 }
 
 func validateService(service string) error {
@@ -391,6 +466,7 @@ func (r Route) cacheEnabled() bool {
 
 func (r Route) health() normalizedHealth {
 	result := normalizedHealth{
+		Active:      true,
 		URI:         "/healthz",
 		Interval:    "30s",
 		Timeout:     "5s",
@@ -398,6 +474,9 @@ func (r Route) health() normalizedHealth {
 	}
 	if r.Health == nil {
 		return result
+	}
+	if r.Health.Active != nil {
+		result.Active = *r.Health.Active
 	}
 	if r.Health.URI != "" {
 		result.URI = r.Health.URI
@@ -431,9 +510,14 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 	var b strings.Builder
 	b.WriteString("{\n")
 	b.WriteString("    admin 127.0.0.1:2019\n")
+	b.WriteString("    order coraza_waf first\n")
 	b.WriteString("    email {$ACME_EMAIL}\n\n")
 	b.WriteString("    servers :443 {\n")
 	b.WriteString("        protocols h1 h2 h3\n")
+	b.WriteString("        0rtt off\n")
+	b.WriteString("        timeouts {\n")
+	b.WriteString("            read_header 10s\n")
+	b.WriteString("        }\n")
 	b.WriteString("    }\n")
 	b.WriteString("}\n\n")
 	if len(hosts) == 0 {
@@ -451,6 +535,7 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 	b.WriteString("        }\n")
 	b.WriteString("        issuer acme\n")
 	b.WriteString("    }\n\n")
+	b.WriteString("    encode zstd gzip\n\n")
 	for index, route := range cfg.Ingress {
 		if route.isCatchAll() || !route.BypassAnubis {
 			continue
@@ -460,21 +545,55 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 			fmt.Fprintf(&b, "        host %s\n", route.Hostname)
 		}
 		fmt.Fprintf(&b, "        path_regexp bypass%d %s\n", index, caddyQuote(route.Path))
+		if len(route.Methods) > 0 {
+			fmt.Fprintf(&b, "        method %s\n", strings.Join(route.Methods, " "))
+		}
 		b.WriteString("    }\n")
 	}
+	b.WriteString("    route {\n")
+	renderWAF(&b, "        ")
 	for index, route := range cfg.Ingress {
 		if route.isCatchAll() || !route.BypassAnubis {
 			continue
 		}
-		fmt.Fprintf(&b, "    handle @bypass%d {\n", index)
-		renderEdgeProxy(&b, "        ", route.Service)
-		b.WriteString("    }\n")
+		fmt.Fprintf(&b, "        handle @bypass%d {\n", index)
+		if route.RateLimit != nil {
+			renderRateLimit(&b, "            ", *route.RateLimit)
+		}
+		renderEdgeProxy(&b, "            ", route.Service)
+		b.WriteString("        }\n")
 	}
-	b.WriteString("    handle {\n")
-	renderEdgeProxy(&b, "        ", ServiceList{"127.0.0.1:8923"})
+	b.WriteString("        handle {\n")
+	renderEdgeProxy(&b, "            ", ServiceList{"127.0.0.1:8923"})
+	b.WriteString("        }\n")
 	b.WriteString("    }\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func renderRateLimit(b *strings.Builder, indent string, limit RateLimit) {
+	key := limit.Key
+	if key == "" {
+		key = "{remote_host}"
+	}
+	fmt.Fprintf(b, "%srate_limit {\n", indent)
+	fmt.Fprintf(b, "%s    zone %s {\n", indent, limit.Name)
+	if len(limit.Methods) > 0 {
+		fmt.Fprintf(b, "%s        match {\n", indent)
+		fmt.Fprintf(b, "%s            method %s\n", indent, strings.Join(limit.Methods, " "))
+		fmt.Fprintf(b, "%s        }\n", indent)
+	}
+	fmt.Fprintf(b, "%s        key %s\n", indent, key)
+	fmt.Fprintf(b, "%s        window %s\n", indent, limit.Window)
+	fmt.Fprintf(b, "%s        events %d\n", indent, limit.Events)
+	if limit.IPv4Prefix != 0 {
+		fmt.Fprintf(b, "%s        ipv4_prefix %d\n", indent, limit.IPv4Prefix)
+	}
+	if limit.IPv6Prefix != 0 {
+		fmt.Fprintf(b, "%s        ipv6_prefix %d\n", indent, limit.IPv6Prefix)
+	}
+	fmt.Fprintf(b, "%s    }\n", indent)
+	fmt.Fprintf(b, "%s}\n", indent)
 }
 
 func renderEdgeProxy(b *strings.Builder, indent string, services ServiceList) {
@@ -492,7 +611,7 @@ func renderEdgeProxy(b *strings.Builder, indent string, services ServiceList) {
 func renderOrigin(cfg Config) string {
 	var b strings.Builder
 	for index, route := range cfg.Ingress {
-		if route.isCatchAll() {
+		if route.isCatchAll() || route.BypassAnubis {
 			continue
 		}
 		renderMatcher(&b, index, route)
@@ -503,7 +622,7 @@ func renderOrigin(cfg Config) string {
 	}
 
 	for index, route := range cfg.Ingress {
-		if route.isCatchAll() {
+		if route.isCatchAll() || route.BypassAnubis {
 			continue
 		}
 		fmt.Fprintf(&b, "handle @route%d {\n", index)
@@ -516,19 +635,19 @@ func renderOrigin(cfg Config) string {
 			if route.Rewrite != "" {
 				fmt.Fprintf(&b, "        rewrite * %s\n", caddyQuote(route.Rewrite))
 			}
-			renderWAF(&b, "        ")
 			if route.cacheEnabled() {
-				fmt.Fprintf(&b, "        handle @cacheable%d {\n", index)
-				b.WriteString("            cache {\n")
-				b.WriteString("                ttl 10m\n")
-				b.WriteString("                default_cache_control no-store\n")
-				b.WriteString("                otter {\n")
-				b.WriteString("                    configuration {\n")
-				b.WriteString("                        size 50000\n")
-				b.WriteString("                    }\n")
+				fmt.Fprintf(&b, "        cache @cacheable%d {\n", index)
+				b.WriteString("            ttl 4h\n")
+				b.WriteString("            default_cache_control \"public, max-age=14400\"\n")
+				b.WriteString("            max_cacheable_body_bytes 1048576\n")
+				b.WriteString("            key {\n")
+				b.WriteString("                hide\n")
+				b.WriteString("            }\n")
+				b.WriteString("            otter {\n")
+				b.WriteString("                configuration {\n")
+				b.WriteString("                    size 50000\n")
 				b.WriteString("                }\n")
 				b.WriteString("            }\n")
-				renderProxy(&b, "            ", route)
 				b.WriteString("        }\n")
 			}
 			renderProxy(&b, "        ", route)
@@ -568,6 +687,9 @@ func renderMatcher(b *strings.Builder, index int, route Route) {
 	if route.Path != "" {
 		fmt.Fprintf(b, "    path_regexp route%d %s\n", index, caddyQuote(route.Path))
 	}
+	if len(route.Methods) > 0 {
+		fmt.Fprintf(b, "    method %s\n", strings.Join(route.Methods, " "))
+	}
 	b.WriteString("}\n")
 }
 
@@ -588,9 +710,10 @@ func renderWAF(b *strings.Builder, indent string) {
 	fmt.Fprintf(b, "%s    directives `\n", indent)
 	fmt.Fprintf(b, "%s        Include @coraza.conf-recommended\n", indent)
 	fmt.Fprintf(b, "%s        Include @crs-setup.conf.example\n", indent)
-	fmt.Fprintf(b, "%s        Include @owasp_crs/*.conf\n", indent)
 	fmt.Fprintf(b, "%s        Include /usr/share/gateway/config/caddy/waf/overrides.conf\n", indent)
+	fmt.Fprintf(b, "%s        Include @owasp_crs/*.conf\n", indent)
 	fmt.Fprintf(b, "%s        SecRuleEngine On\n", indent)
+	fmt.Fprintf(b, "%s        SecResponseBodyAccess Off\n", indent)
 	fmt.Fprintf(b, "%s    `\n", indent)
 	fmt.Fprintf(b, "%s}\n", indent)
 }
@@ -605,10 +728,12 @@ func renderProxy(b *strings.Builder, indent string, route Route) {
 		fmt.Fprintf(b, "%slb_policy %s\n", indent+"    ", route.LoadBalance)
 	}
 	health := route.health()
-	fmt.Fprintf(b, "%shealth_uri %s\n", indent+"    ", health.URI)
-	fmt.Fprintf(b, "%shealth_interval %s\n", indent+"    ", health.Interval)
-	fmt.Fprintf(b, "%shealth_timeout %s\n", indent+"    ", health.Timeout)
-	fmt.Fprintf(b, "%slb_try_duration %s\n", indent+"    ", health.TryDuration)
+	if health.Active {
+		fmt.Fprintf(b, "%shealth_uri %s\n", indent+"    ", health.URI)
+		fmt.Fprintf(b, "%shealth_interval %s\n", indent+"    ", health.Interval)
+		fmt.Fprintf(b, "%shealth_timeout %s\n", indent+"    ", health.Timeout)
+		fmt.Fprintf(b, "%slb_try_duration %s\n", indent+"    ", health.TryDuration)
+	}
 	fmt.Fprintf(b, "%sstream_close_delay 5m\n", indent+"    ")
 	fmt.Fprintf(b, "%s}\n", indent)
 }

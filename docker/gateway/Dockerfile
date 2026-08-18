@@ -27,7 +27,8 @@ RUN /go/bin/xcaddy build v${CADDY_VERSION} \
     --with github.com/caddy-dns/cloudflare@v0.2.4 \
     --with github.com/corazawaf/coraza-caddy/v2@v2.5.0 \
     --with github.com/caddyserver/cache-handler@v0.16.0 \
-    --with github.com/darkweak/storages/otter/caddy@v0.0.15
+    --with github.com/darkweak/storages/otter/caddy@v0.0.15 \
+    --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db
 
 COPY cmd/route-renderer/go.mod cmd/route-renderer/go.sum /build/renderer/
 RUN cd /build/renderer && go mod download

@@ -1,5 +1,6 @@
 bots:
   - import: (data)/bots/_deny-pathological.yaml
+  - import: (data)/bots/headless-browsers.yaml
   - import: (data)/meta/ai-block-aggressive.yaml
   - import: (data)/crawlers/_allow-good.yaml
   - import: (data)/common/keep-internet-working.yaml
@@ -9,12 +10,18 @@ bots:
       Mozilla|Opera
     action: WEIGH
     weight:
-      adjust: 10
+      # Keep the default browser path in the challenge pipeline, but below
+      # the medium-risk threshold so ordinary browsers get a light check.
+      adjust: 5
 
 thresholds:
   - name: minimal-suspicion
     expression: weight <= 0
-    action: ALLOW
+    action: CHALLENGE
+    challenge:
+      algorithm: fast
+      # entrypoint.sh replaces this with ANUBIS_DIFFICULTY.
+      difficulty: __ANUBIS_BASE_DIFFICULTY__
 
   - name: mild-suspicion
     expression:
@@ -23,8 +30,9 @@ thresholds:
         - weight < 10
     action: CHALLENGE
     challenge:
-      algorithm: metarefresh
-      difficulty: 1
+      algorithm: fast
+      # entrypoint.sh replaces this with ANUBIS_DIFFICULTY.
+      difficulty: __ANUBIS_BASE_DIFFICULTY__
 
   - name: moderate-suspicion
     expression:
@@ -34,14 +42,34 @@ thresholds:
     action: CHALLENGE
     challenge:
       algorithm: fast
-      difficulty: 2
+      # entrypoint.sh replaces this with ANUBIS_DIFFICULTY + 1.
+      difficulty: __ANUBIS_MODERATE_DIFFICULTY__
 
   - name: high-suspicion
-    expression: weight >= 20
+    expression:
+      all:
+        - weight >= 20
+        - weight < 30
     action: CHALLENGE
     challenge:
       algorithm: fast
-      difficulty: 4
+      # entrypoint.sh replaces this with ANUBIS_DIFFICULTY + 2.
+      difficulty: __ANUBIS_HIGH_RISK_DIFFICULTY__
+
+  - name: extreme-suspicion
+    expression:
+      all:
+        - weight >= 30
+        - weight < 40
+    action: CHALLENGE
+    challenge:
+      algorithm: fast
+      # entrypoint.sh replaces this with ANUBIS_DIFFICULTY + 3.
+      difficulty: __ANUBIS_EXTREME_DIFFICULTY__
+
+  - name: block-extreme-suspicion
+    expression: weight >= 40
+    action: DENY
 
 store:
   backend: bbolt

@@ -34,6 +34,16 @@
           "minLength": 1,
           "description": "RE2-compatible path regular expression."
         },
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"]
+          },
+          "description": "Optional HTTP methods that must match this route."
+        },
         "service": {
           "description": "An http(s)/h2c upstream URL, a list of upstream URLs, or the final http_status:444 rule.",
           "oneOf": [
@@ -70,7 +80,7 @@
         "bypass_anubis": {
           "type": "boolean",
           "default": false,
-          "description": "Send this path directly from edge Caddy to the declared upstream, bypassing Anubis and backend WAF. Requires a path and cache: false when cache is specified."
+          "description": "Send this path directly from edge Caddy to the declared upstream, bypassing Anubis but still passing through edge Coraza and any route rate limit. Requires a path and cache: false when cache is specified."
         },
         "cache": {
           "type": "boolean",
@@ -94,6 +104,11 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "active": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable active HTTP health checks for this upstream."
+            },
             "uri": {
               "type": "string",
               "minLength": 1,
@@ -113,8 +128,53 @@
               "type": "string",
               "minLength": 1,
               "default": "5s"
+            }
           }
-        }
+        },
+        "rate_limit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "window", "events"],
+          "description": "A per-client rate limit for a route that bypasses Anubis.",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1,
+              "default": "{remote_host}"
+            },
+            "window": {
+              "type": "string",
+              "minLength": 1
+            },
+            "events": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "methods": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"]
+              },
+              "description": "Optional HTTP methods to rate limit. Leave OPTIONS out of API quotas when CORS preflight must remain inexpensive."
+            },
+            "ipv4_prefix": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            },
+            "ipv6_prefix": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 128
+            }
+          }
         }
       },
       "oneOf": [

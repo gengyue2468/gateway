@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - hostname: shortlinks.your-domain.example
+    service: https://shortlinks.example.com
+    health:
+      active: false
+  - service: http_status:444

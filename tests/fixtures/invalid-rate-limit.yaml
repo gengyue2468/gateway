@@ -1,0 +1,9 @@
+version: 1
+ingress:
+  - hostname: example.com
+    service: https://origin.example.com
+    rate_limit:
+      name: public_origin
+      window: 1m
+      events: 10
+  - service: http_status:444
