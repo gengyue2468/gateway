@@ -613,7 +613,7 @@ func renderHTTPCatchAll(b *strings.Builder, hosts []string) {
 }
 
 func renderErrorHandler(b *strings.Builder, indent string) {
-	body := "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Error</title></head><body><h1>{err.status_code}</h1><p>{err.message}</p></body></html>"
+	body := "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Error</title></head><body><h1>{err.status_code}</h1><p>{err.message}</p><p>at {err.trace}</p></body></html>"
 	fmt.Fprintf(b, "%shandle_errors {\n", indent)
 	fmt.Fprintf(b, "%s    header Content-Type \"text/html; charset=utf-8\"\n", indent)
 	fmt.Fprintf(b, "%s    header Cache-Control \"no-store\"\n", indent)

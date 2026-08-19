@@ -122,7 +122,8 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
 	|| ! grep -F 'header Content-Type "text/html; charset=utf-8"' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F 'header Content-Type "text/html; charset=utf-8"' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F '{err.status_code}' "$tmp_dir/edge.Caddyfile" >/dev/null \
-	|| ! grep -F '{err.message}' "$tmp_dir/backend.caddy" >/dev/null; then
+	|| ! grep -F '{err.message}' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F '{err.trace}' "$tmp_dir/backend.caddy" >/dev/null; then
 	printf 'not ok - edge WAF, rewrite, redirect, meta redirect, or Anubis bypass was not rendered\n' >&2
 	exit 1
 fi
