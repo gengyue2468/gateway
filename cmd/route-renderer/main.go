@@ -613,7 +613,40 @@ func renderHTTPCatchAll(b *strings.Builder, hosts []string) {
 }
 
 func renderErrorHandler(b *strings.Builder, indent string) {
-	body := "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Error</title></head><body><h1>{err.status_code}</h1><p>{err.message}</p><p>at {err.trace}</p></body></html>"
+	body := `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>!!! An unexpected error {err.status_code} occurred !!!</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        margin: 40px;
+        font-family: sans-serif;
+        color: #222;
+      }
+
+      h1 {
+        font-family: monospace;
+        font-size: 1.6rem;
+        margin-bottom: 0.5em;
+      }
+
+      p {
+        font-family: monospace;
+        font-size: 1.1rem;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Error {err.status_code}</h1>
+      <p>{err.message}</p>
+      <p>at {err.trace}<br />status: {err.status_code} {err.status_text}<br />id: {err.id}</p>
+    </main>
+  </body>
+</html>`
 	fmt.Fprintf(b, "%shandle_errors {\n", indent)
 	fmt.Fprintf(b, "%s    header Content-Type \"text/html; charset=utf-8\"\n", indent)
 	fmt.Fprintf(b, "%s    header Cache-Control \"no-store\"\n", indent)
