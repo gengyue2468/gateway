@@ -1,6 +1,6 @@
 version: 1
 ingress:
-  - hostname: example.com
+  - path: ^/public$
     service: https://origin.example.com
     rate_limit:
       name: public_origin

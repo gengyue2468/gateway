@@ -126,12 +126,14 @@ actual upstream cache behavior.
 
 ## Rate Limiting
 
-Bypass routes may declare a per-client `rate_limit`. The renderer emits the
-optional Caddy rate-limit handler inside the direct edge handler; normal routes
-cannot use it accidentally. The default key is the connecting client address,
-and an IPv6 prefix can be configured to prevent address rotation from bypassing
-the limit. Set route-level `methods` to restrict which HTTP methods bypass
-Anubis; set rate-limit `methods` to restrict which methods consume the zone.
+Normal and bypass routes may declare a per-client `rate_limit`. On a normal
+route, the renderer applies the limit after edge Coraza/WAF and before Anubis;
+on a bypass route, it remains inside the direct edge handler. Normal rate-limit
+routes require a hostname so the edge can match them. The default key is the
+connecting client address, and an IPv6 prefix can be configured to prevent
+address rotation from bypassing the limit. Set route-level `methods` to
+restrict which HTTP methods match a route; set rate-limit `methods` to restrict
+which methods consume the zone.
 Leave `OPTIONS` out of API quotas when CORS preflight should not consume the
 business request budget.
 

@@ -356,8 +356,8 @@ func validateRoute(index int, route Route, isLast bool) error {
 		return fmt.Errorf("%s bypass_anubis routes must set cache: false", prefix)
 	}
 	if route.RateLimit != nil {
-		if !route.BypassAnubis {
-			return fmt.Errorf("%s rate_limit requires bypass_anubis", prefix)
+		if !route.BypassAnubis && route.Hostname == "" {
+			return fmt.Errorf("%s rate_limit requires hostname for an edge route", prefix)
 		}
 		if !rateLimitNamePattern.MatchString(route.RateLimit.Name) {
 			return fmt.Errorf("%s rate_limit.name must contain only letters, digits, underscores, or hyphens", prefix)
@@ -705,6 +705,12 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 		b.WriteString("    }\n")
 	}
 	for index, route := range cfg.Ingress {
+		if route.isCatchAll() || route.BypassAnubis || route.RateLimit == nil {
+			continue
+		}
+		renderEdgeRateLimitMatcher(&b, index, route)
+	}
+	for index, route := range cfg.Ingress {
 		if route.isCatchAll() || !route.BypassAnubis {
 			continue
 		}
@@ -724,6 +730,18 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 	}
 	b.WriteString("    route {\n")
 	renderWAF(&b, "        ")
+	for index, route := range cfg.Ingress {
+		if route.isCatchAll() || route.BypassAnubis || route.RateLimit == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "        # @rate_limit%d applies after Coraza and before Anubis.\n", index)
+		fmt.Fprintf(&b, "        handle @rate_limit%d {\n", index)
+		b.WriteString("            route {\n")
+		renderRateLimit(&b, "                ", *route.RateLimit)
+		renderEdgeProxy(&b, "                ", ServiceList{"127.0.0.1:8923"})
+		b.WriteString("            }\n")
+		b.WriteString("        }\n")
+	}
 	b.WriteString("        handle {\n")
 	renderEdgeProxy(&b, "            ", ServiceList{"127.0.0.1:8923"})
 	b.WriteString("        }\n")
@@ -822,6 +840,20 @@ func renderRateLimit(b *strings.Builder, indent string, limit RateLimit) {
 
 func renderEdgeProxy(b *strings.Builder, indent string, services ServiceList) {
 	renderReverseProxy(b, indent, services, "", nil, true, false, false, "")
+}
+
+func renderEdgeRateLimitMatcher(b *strings.Builder, index int, route Route) {
+	fmt.Fprintf(b, "    @rate_limit%d {\n", index)
+	if route.Hostname != "" {
+		fmt.Fprintf(b, "        host %s\n", route.Hostname)
+	}
+	if route.Path != "" {
+		fmt.Fprintf(b, "        path_regexp rate_limit%d %s\n", index, caddyQuote(route.Path))
+	}
+	if len(route.Methods) > 0 {
+		fmt.Fprintf(b, "        method %s\n", strings.Join(route.Methods, " "))
+	}
+	b.WriteString("    }\n")
 }
 
 func renderEdgeProxyRoute(b *strings.Builder, indent string, route Route) {

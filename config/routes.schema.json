@@ -175,7 +175,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["name", "window", "events"],
-          "description": "A per-client rate limit for a route that bypasses Anubis.",
+          "description": "A per-client rate limit for an edge route. Normal routes apply it after Coraza/WAF and before Anubis; bypass routes retain their direct edge placement.",
           "properties": {
             "name": {
               "type": "string",
@@ -293,8 +293,7 @@
         {
           "if": { "required": ["rate_limit"] },
           "then": {
-            "required": ["bypass_anubis"],
-            "properties": { "bypass_anubis": { "const": true } }
+            "required": ["hostname"]
           }
         },
         {

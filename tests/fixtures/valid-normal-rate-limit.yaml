@@ -1,0 +1,13 @@
+version: 1
+ingress:
+  - hostname: limited.your-domain.example
+    path: ^/public$
+    service: https://origin.example.com
+    rate_limit:
+      name: normal_per_client
+      key: "{remote_host}"
+      window: 1m
+      events: 600
+      methods: [GET, HEAD]
+      ipv6_prefix: 64
+  - service: http_status:444

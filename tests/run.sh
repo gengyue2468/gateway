@@ -40,6 +40,24 @@ run_renderer() {
 docker image inspect "$image" >/dev/null
 pass "gateway image is available"
 
+policy_status=0
+timeout 3s docker run --rm \
+    --entrypoint /bin/sh \
+    "$image" \
+    -c 'sed -e "s/__ANUBIS_BASE_DIFFICULTY__/4/g" -e "s/__ANUBIS_MODERATE_DIFFICULTY__/5/g" -e "s/__ANUBIS_HIGH_RISK_DIFFICULTY__/6/g" -e "s/__ANUBIS_EXTREME_DIFFICULTY__/7/g" /usr/share/gateway/config/anubis/bot-policy.yaml > /tmp/anubis-policy.yaml && exec /usr/local/bin/anubis --policy-fname /tmp/anubis-policy.yaml --bind 127.0.0.1:0 --metrics-bind 127.0.0.1:0 --target http://127.0.0.1:9 --ed25519-private-key-hex 0000000000000000000000000000000000000000000000000000000000000000' \
+    >"$tmp_dir/anubis-policy.log" 2>&1 || policy_status=$?
+if [ "$policy_status" -ne 124 ]; then
+    printf 'not ok - Anubis policy did not load successfully\n' >&2
+    cat "$tmp_dir/anubis-policy.log" >&2
+    exit 1
+fi
+pass "Anubis policy loads with CEL allow rules"
+if grep -F 'common/keep-internet-working.yaml' "$repo_dir/config/anubis/bot-policy.yaml" >/dev/null; then
+    printf 'not ok - broad favicon allow policy remains enabled\n' >&2
+    exit 1
+fi
+pass "static policy does not add a broad favicon allow"
+
 validate_schema() {
     python3 "$repo_dir/scripts/validate-schema.py" "$repo_dir/config/routes.schema.json" "$@"
 }
@@ -50,7 +68,8 @@ validate_schema \
     "$repo_dir/tests/fixtures/path-only-backend.yaml" \
     "$repo_dir/tests/fixtures/cache-safety.yaml" \
     "$repo_dir/tests/fixtures/cache-policy.yaml" \
-    "$repo_dir/tests/fixtures/valid-bypass-options.yaml"
+    "$repo_dir/tests/fixtures/valid-bypass-options.yaml" \
+    "$repo_dir/tests/fixtures/valid-normal-rate-limit.yaml"
 pass "route fixtures pass JSON schema validation"
 
 run_renderer --config /tests/fixtures/valid-routes.yaml --check
@@ -176,6 +195,32 @@ fi
 pass "rewrite, redirect, meta redirect, and Anubis bypass render"
 
 run_renderer \
+    --config /tests/fixtures/valid-normal-rate-limit.yaml \
+    --edge-output /tmp/gateway-tests/normal-rate-limit-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/normal-rate-limit-backend.caddy
+if ! grep -F '# @rate_limit0 applies after Coraza and before Anubis.' "$tmp_dir/normal-rate-limit-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'handle @rate_limit0 {' "$tmp_dir/normal-rate-limit-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'zone normal_per_client {' "$tmp_dir/normal-rate-limit-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'events 600' "$tmp_dir/normal-rate-limit-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'reverse_proxy 127.0.0.1:8923' "$tmp_dir/normal-rate-limit-edge.Caddyfile" >/dev/null; then
+    printf 'not ok - normal route rate limit was not rendered at the Anubis boundary\n' >&2
+    exit 1
+fi
+if ! awk '
+    /^        coraza_waf \{/ { waf = NR }
+    /^        handle @rate_limit0 \{/ { limit = NR }
+    END { exit !(waf > 0 && limit > 0 && waf < limit) }
+' "$tmp_dir/normal-rate-limit-edge.Caddyfile"; then
+    printf 'not ok - normal route rate limit was placed before the edge WAF\n' >&2
+    exit 1
+fi
+if grep -F 'bypass' "$tmp_dir/normal-rate-limit-edge.Caddyfile" >/dev/null; then
+    printf 'not ok - normal route rate limit unexpectedly bypassed Anubis\n' >&2
+    exit 1
+fi
+pass "normal route rate limits remain behind the edge WAF"
+
+run_renderer \
     --config /tests/fixtures/cache-policy.yaml \
     --edge-output /tmp/gateway-tests/cache-policy-edge.Caddyfile \
     --origin-output /tmp/gateway-tests/cache-policy-backend.caddy
@@ -269,6 +314,8 @@ validate_caddy_configs no-active-health.yaml
 pass "no-active-health generated Caddy configuration validates"
 validate_caddy_configs valid-bypass-options.yaml
 pass "valid bypass options pass real Caddy validation"
+validate_caddy_configs valid-normal-rate-limit.yaml
+pass "normal route rate limit passes real Caddy validation"
 validate_caddy_configs cache-safety.yaml
 pass "cache safety generated Caddy configuration validates"
 validate_caddy_configs cache-policy.yaml
@@ -318,7 +365,7 @@ expect_failure "meta redirect cannot have a rate limit" \
     run_renderer --config /tests/fixtures/invalid-meta-rate-limit.yaml --check
 expect_failure "catch-all cannot have route options" \
     run_renderer --config /tests/fixtures/invalid-catchall-option.yaml --check
-expect_failure "rate limit requires an Anubis bypass" \
+expect_failure "path-only rate limit cannot be rendered at the edge" \
     run_renderer --config /tests/fixtures/invalid-rate-limit.yaml --check
 expect_failure "rate limit methods must be uppercase HTTP methods" \
     run_renderer --config /tests/fixtures/invalid-rate-limit-method.yaml --check
@@ -355,6 +402,8 @@ expect_failure "schema rejects catch-all options" \
     validate_schema "$repo_dir/tests/fixtures/invalid-catchall-option.yaml"
 expect_failure "schema rejects unsupported cache query sorting" \
     validate_schema "$repo_dir/tests/fixtures/invalid-cache-sort-query.yaml"
+expect_failure "schema rejects a path-only rate limit" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-rate-limit.yaml"
 
 docker run --rm \
     -e ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=cdnno.de \
