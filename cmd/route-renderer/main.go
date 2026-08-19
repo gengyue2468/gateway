@@ -536,6 +536,7 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 	b.WriteString("        }\n")
 	b.WriteString("    }\n")
 	b.WriteString("}\n\n")
+	renderHTTPCatchAll(&b, hosts)
 	if len(hosts) == 0 {
 		return b.String()
 	}
@@ -590,8 +591,34 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 	renderEdgeProxy(&b, "            ", ServiceList{"127.0.0.1:8923"})
 	b.WriteString("        }\n")
 	b.WriteString("    }\n")
+	renderErrorHandler(&b, "    ")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func renderHTTPCatchAll(b *strings.Builder, hosts []string) {
+	b.WriteString("http://:80 {\n")
+	if len(hosts) > 0 {
+		fmt.Fprintf(b, "    @known_host host %s\n", strings.Join(hosts, " "))
+	}
+	b.WriteString("    route {\n")
+	if len(hosts) > 0 {
+		b.WriteString("        redir @known_host https://{host}{uri} 308\n")
+	}
+	b.WriteString("        respond 444 {\n")
+	b.WriteString("            close\n")
+	b.WriteString("        }\n")
+	b.WriteString("    }\n")
+	b.WriteString("}\n\n")
+}
+
+func renderErrorHandler(b *strings.Builder, indent string) {
+	body := "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Error</title></head><body><h1>{err.status_code}</h1><p>{err.message}</p></body></html>"
+	fmt.Fprintf(b, "%shandle_errors {\n", indent)
+	fmt.Fprintf(b, "%s    header Content-Type \"text/html; charset=utf-8\"\n", indent)
+	fmt.Fprintf(b, "%s    header Cache-Control \"no-store\"\n", indent)
+	fmt.Fprintf(b, "%s    respond %s\n", indent, caddyQuote(body))
+	fmt.Fprintf(b, "%s}\n", indent)
 }
 
 func renderRateLimit(b *strings.Builder, indent string, limit RateLimit) {
@@ -729,6 +756,8 @@ func renderOrigin(cfg Config) string {
 		}
 		b.WriteString("}\n\n")
 	}
+
+	renderErrorHandler(&b, "")
 
 	b.WriteString("respond 444 {\n")
 	b.WriteString("    close\n")

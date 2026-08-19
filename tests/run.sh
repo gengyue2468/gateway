@@ -114,7 +114,15 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
 	|| ! grep -F 'header >Souin-Cache-Control "no-store"' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'header >Surrogate-Control "no-store"' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'header >CDN-Cache-Control "no-store"' "$tmp_dir/backend.caddy" >/dev/null \
-	|| ! grep -F 'copy_response' "$tmp_dir/backend.caddy" >/dev/null; then
+	|| ! grep -F 'copy_response' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'http://:80 {' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F 'redir @known_host https://{host}{uri} 308' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F 'handle_errors {' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F 'handle_errors {' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'header Content-Type "text/html; charset=utf-8"' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F 'header Content-Type "text/html; charset=utf-8"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F '{err.status_code}' "$tmp_dir/edge.Caddyfile" >/dev/null \
+	|| ! grep -F '{err.message}' "$tmp_dir/backend.caddy" >/dev/null; then
 	printf 'not ok - edge WAF, rewrite, redirect, meta redirect, or Anubis bypass was not rendered\n' >&2
 	exit 1
 fi
