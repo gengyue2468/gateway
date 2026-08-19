@@ -650,7 +650,11 @@ func renderErrorHandler(b *strings.Builder, indent string) {
 	fmt.Fprintf(b, "%shandle_errors {\n", indent)
 	fmt.Fprintf(b, "%s    header Content-Type \"text/html; charset=utf-8\"\n", indent)
 	fmt.Fprintf(b, "%s    header Cache-Control \"no-store\"\n", indent)
-	fmt.Fprintf(b, "%s    respond %s\n", indent, caddyQuote(body))
+	fmt.Fprintf(b, "%s    respond <<GATEWAY_ERROR_HTML\n", indent)
+	for _, line := range strings.Split(body, "\n") {
+		fmt.Fprintf(b, "%s    %s\n", indent, line)
+	}
+	fmt.Fprintf(b, "%s    GATEWAY_ERROR_HTML\n", indent)
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 

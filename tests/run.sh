@@ -121,6 +121,7 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
 	|| ! grep -F 'handle_errors {' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'header Content-Type "text/html; charset=utf-8"' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F 'header Content-Type "text/html; charset=utf-8"' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'respond <<GATEWAY_ERROR_HTML' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F '{err.status_code}' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F '!!! An unexpected error {err.status_code} occurred !!!' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'font-family: monospace' "$tmp_dir/backend.caddy" >/dev/null \
