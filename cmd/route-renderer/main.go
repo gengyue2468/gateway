@@ -21,6 +21,11 @@ const (
 	defaultConfig       = "/config/routes.yaml"
 	defaultEdgeOutput   = "/generated/edge.Caddyfile"
 	defaultOriginOutput = "/generated/origin.caddy"
+
+	defaultCacheTTL                 = "4h"
+	defaultCacheStale               = "0s"
+	defaultCacheControl             = "public, max-age=14400"
+	defaultCacheMaxBodyBytes uint64 = 1048576
 )
 
 type Config struct {
@@ -37,10 +42,70 @@ type Route struct {
 	Rewrite      string        `yaml:"rewrite,omitempty"`
 	MetaRedirect string        `yaml:"meta_redirect,omitempty"`
 	BypassAnubis bool          `yaml:"bypass_anubis,omitempty"`
-	Cache        *bool         `yaml:"cache,omitempty"`
+	Cache        *CacheConfig  `yaml:"cache,omitempty"`
 	LoadBalance  string        `yaml:"load_balance,omitempty"`
 	Health       *HealthConfig `yaml:"health,omitempty"`
 	RateLimit    *RateLimit    `yaml:"rate_limit,omitempty"`
+}
+
+// CacheConfig accepts the historical boolean shorthand as well as route-level
+// cache policy. The object form is an explicit opt-in unless enabled is false.
+type CacheConfig struct {
+	Enabled               *bool   `yaml:"enabled,omitempty"`
+	TTL                   string  `yaml:"ttl,omitempty"`
+	Stale                 string  `yaml:"stale,omitempty"`
+	DefaultCacheControl   string  `yaml:"default_cache_control,omitempty"`
+	MaxCacheableBodyBytes *uint64 `yaml:"max_cacheable_body_bytes,omitempty"`
+	SortQuery             *bool   `yaml:"sort_query,omitempty"`
+}
+
+var cacheConfigFields = map[string]struct{}{
+	"enabled":                  {},
+	"ttl":                      {},
+	"stale":                    {},
+	"default_cache_control":    {},
+	"max_cacheable_body_bytes": {},
+	"sort_query":               {},
+}
+
+func (c *CacheConfig) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		if node.Tag != "!!bool" {
+			return errors.New("cache must be a boolean or an object")
+		}
+		var enabled bool
+		if err := node.Decode(&enabled); err != nil {
+			return fmt.Errorf("decode cache: %w", err)
+		}
+		*c = CacheConfig{Enabled: &enabled}
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return errors.New("cache must be a boolean or an object")
+	}
+	for index := 0; index < len(node.Content); index += 2 {
+		key := node.Content[index]
+		if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+			return errors.New("cache object keys must be strings")
+		}
+		if _, ok := cacheConfigFields[key.Value]; !ok {
+			return fmt.Errorf("cache contains unknown field %q", key.Value)
+		}
+	}
+	type plainCacheConfig CacheConfig
+	var value plainCacheConfig
+	if err := node.Decode(&value); err != nil {
+		return fmt.Errorf("decode cache: %w", err)
+	}
+	*c = CacheConfig(value)
+	return nil
+}
+
+type normalizedCache struct {
+	TTL                   string
+	Stale                 string
+	DefaultCacheControl   string
+	MaxCacheableBodyBytes uint64
 }
 
 type ServiceList []string
@@ -271,6 +336,11 @@ func validateRoute(index int, route Route, isLast bool) error {
 	if len(route.Service) == 0 {
 		return fmt.Errorf("%s service must not be empty unless it is a redirect or meta_redirect", prefix)
 	}
+	if route.Cache != nil {
+		if err := validateCacheConfig(prefix, *route.Cache); err != nil {
+			return err
+		}
+	}
 	if route.Rewrite != "" {
 		if err := validateRewriteTarget(route.Rewrite); err != nil {
 			return fmt.Errorf("%s rewrite: %w", prefix, err)
@@ -282,7 +352,7 @@ func validateRoute(index int, route Route, isLast bool) error {
 	if route.BypassAnubis && route.Hostname == "" {
 		return fmt.Errorf("%s bypass_anubis requires a hostname for an edge route", prefix)
 	}
-	if route.BypassAnubis && route.Cache != nil && *route.Cache {
+	if route.BypassAnubis && route.cacheEnabled() {
 		return fmt.Errorf("%s bypass_anubis routes must set cache: false", prefix)
 	}
 	if route.RateLimit != nil {
@@ -353,6 +423,45 @@ func validateRoute(index int, route Route, isLast bool) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateCacheConfig(prefix string, cache CacheConfig) error {
+	if cache.Enabled != nil && !*cache.Enabled {
+		if cache.TTL != "" || cache.Stale != "" || cache.DefaultCacheControl != "" || cache.MaxCacheableBodyBytes != nil || (cache.SortQuery != nil && *cache.SortQuery) {
+			return fmt.Errorf("%s disabled cache cannot define cache policy", prefix)
+		}
+		return nil
+	}
+	if cache.TTL != "" {
+		ttl, err := time.ParseDuration(cache.TTL)
+		if err != nil || ttl <= 0 {
+			if err == nil {
+				err = errors.New("must be greater than zero")
+			}
+			return fmt.Errorf("%s has invalid cache.ttl: %w", prefix, err)
+		}
+	}
+	if cache.Stale != "" {
+		stale, err := time.ParseDuration(cache.Stale)
+		if err != nil || stale < 0 {
+			if err == nil {
+				err = errors.New("must not be negative")
+			}
+			return fmt.Errorf("%s has invalid cache.stale: %w", prefix, err)
+		}
+	}
+	if cache.DefaultCacheControl != "" {
+		if strings.TrimSpace(cache.DefaultCacheControl) == "" || hasUnsafeText(cache.DefaultCacheControl) {
+			return fmt.Errorf("%s cache.default_cache_control must be non-empty and free of Caddy control characters", prefix)
+		}
+	}
+	if cache.MaxCacheableBodyBytes != nil && *cache.MaxCacheableBodyBytes == 0 {
+		return fmt.Errorf("%s cache.max_cacheable_body_bytes must be positive", prefix)
+	}
+	if cache.SortQuery != nil && *cache.SortQuery {
+		return fmt.Errorf("%s cache.sort_query=true is unsupported by cache-handler v0.16.0; no query-normalizing Caddy directive was rendered", prefix)
 	}
 	return nil
 }
@@ -477,7 +586,35 @@ func (r Route) isCatchAll() bool {
 }
 
 func (r Route) cacheEnabled() bool {
-	return r.Cache != nil && *r.Cache
+	if r.Cache == nil {
+		return false
+	}
+	return r.Cache.Enabled == nil || *r.Cache.Enabled
+}
+
+func (r Route) cachePolicy() normalizedCache {
+	result := normalizedCache{
+		TTL:                   defaultCacheTTL,
+		Stale:                 defaultCacheStale,
+		DefaultCacheControl:   defaultCacheControl,
+		MaxCacheableBodyBytes: defaultCacheMaxBodyBytes,
+	}
+	if r.Cache == nil {
+		return result
+	}
+	if r.Cache.TTL != "" {
+		result.TTL = r.Cache.TTL
+	}
+	if r.Cache.Stale != "" {
+		result.Stale = r.Cache.Stale
+	}
+	if r.Cache.DefaultCacheControl != "" {
+		result.DefaultCacheControl = r.Cache.DefaultCacheControl
+	}
+	if r.Cache.MaxCacheableBodyBytes != nil {
+		result.MaxCacheableBodyBytes = *r.Cache.MaxCacheableBodyBytes
+	}
+	return result
 }
 
 func (r Route) health() normalizedHealth {
@@ -770,11 +907,13 @@ func renderOrigin(cfg Config) string {
 		} else {
 			b.WriteString("    route {\n")
 			if route.cacheEnabled() {
+				cache := route.cachePolicy()
 				fmt.Fprintf(&b, "        cache @cacheable%d {\n", index)
-				b.WriteString("            ttl 4h\n")
+				fmt.Fprintf(&b, "            ttl %s\n", cache.TTL)
+				fmt.Fprintf(&b, "            stale %s\n", cache.Stale)
 				b.WriteString("            mode strict\n")
-				b.WriteString("            default_cache_control \"public, max-age=14400\"\n")
-				b.WriteString("            max_cacheable_body_bytes 1048576\n")
+				fmt.Fprintf(&b, "            default_cache_control %s\n", caddyQuote(cache.DefaultCacheControl))
+				fmt.Fprintf(&b, "            max_cacheable_body_bytes %d\n", cache.MaxCacheableBodyBytes)
 				b.WriteString("            key {\n")
 				b.WriteString("                hide\n")
 				b.WriteString("            }\n")
@@ -838,7 +977,11 @@ func renderCacheMatcher(b *strings.Builder, index int) {
 	b.WriteString("    method GET HEAD\n")
 	b.WriteString("    not header Cookie *\n")
 	b.WriteString("    not header Authorization *\n")
+	b.WriteString("    not header Cache-Control *no-cache*\n")
+	b.WriteString("    not header Cache-Control *no-store*\n")
+	b.WriteString("    not header Pragma *no-cache*\n")
 	b.WriteString("    not header Connection *Upgrade*\n")
+	b.WriteString("    not header Upgrade *\n")
 	b.WriteString("    not header Upgrade websocket\n")
 	b.WriteString("    not path /api /api/* /login* /logout* /admin* /healthz /healthz/*\n")
 	b.WriteString("}\n")

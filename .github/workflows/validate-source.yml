@@ -51,6 +51,7 @@ jobs:
           /tmp/route-renderer --config tests/fixtures/valid-routes.yaml --check
           /tmp/route-renderer --config tests/fixtures/empty-routes.yaml --check
           /tmp/route-renderer --config tests/fixtures/cache-safety.yaml --check
+          /tmp/route-renderer --config tests/fixtures/cache-policy.yaml --check
 
       - name: Validate route schema
         run: |
@@ -60,11 +61,13 @@ jobs:
             tests/fixtures/empty-routes.yaml \
             tests/fixtures/path-only-backend.yaml \
             tests/fixtures/cache-safety.yaml \
+            tests/fixtures/cache-policy.yaml \
             tests/fixtures/valid-bypass-options.yaml
 
       - name: Check shell scripts
         run: |
           sh -n docker/gateway/entrypoint.sh
+          sh -n scripts/cache-benchmark.sh
           sh -n scripts/publish-image.sh
           sh -n deploy/install.sh
           sh -n tests/run.sh

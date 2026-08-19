@@ -76,16 +76,19 @@ direct routes.
 ## Caching
 
 Shared caching is an explicit opt-in: a normal proxy route must set
-`cache: true`. The checked-in production `routes.yaml` is deny-all, and the
-example public homepage marks its intended cache behavior explicitly. This
-keeps an unreviewed route from becoming a shared cache by default.
+`cache: true` or use the route-level `cache` object. The checked-in production
+`routes.yaml` is deny-all, and the example public homepage marks its intended
+cache behavior explicitly. This keeps an unreviewed route from becoming a
+shared cache by default. The object form supports `ttl`, `stale`,
+`default_cache_control`, and `max_cacheable_body_bytes`; omitted values retain
+the safe defaults of `4h`, `0s`, `public, max-age=14400`, and `1048576` bytes.
 
 Opted-in routes cache only GET and HEAD requests without `Cookie`,
-`Authorization`, WebSocket upgrades, or login/admin/API/health paths. The
-original request path is tested before any route rewrite, including `/api`,
-`/api/`, their children, `/healthz`, and `/healthz/`. The gateway never removes
-`Cookie`; application session cookies remain isolated and any request carrying a
-cookie bypasses the shared cache.
+`Authorization`, client `no-cache`/`no-store` directives, WebSocket upgrades,
+or login/admin/API/health paths. The original request path is tested before any
+route rewrite, including `/api`, `/api/`, their children, `/healthz`, and
+`/healthz/`. The gateway never removes `Cookie`; application session cookies
+remain isolated and any request carrying a cookie bypasses the shared cache.
 
 The bundled cache-handler v0.16/Souin 1.7.7 honors response `private`,
 `no-store`, and `Vary` (including separate keys for declared varying headers and
@@ -94,12 +97,32 @@ the renderer adds a Caddy response matcher to opted-in reverse proxies: any
 `Set-Cookie` response is sent with deferred `Cache-Control: no-store` before
 cache-handler sees it. The cookie is still delivered to the client.
 
-When an opted-in origin sends no cache directive, the gateway uses
-`public, max-age=14400` with a four-hour storage TTL. Do not opt in a route whose
-response varies on a request header that is not declared in `Vary` or otherwise
-represented in the cache key. The offline suite validates generated Caddy
-configuration and renderer ordering; it does not claim live HTTP cache behavior
-without an upstream fixture.
+When an opted-in origin sends no cache directive, the route's
+`default_cache_control` is used. Do not opt in a route whose response varies on
+a request header that is not declared in `Vary` or otherwise represented in the
+cache key. The cache key retains the complete query string by default. The
+schema exposes `sort_query` for forward compatibility, but the pinned
+cache-handler v0.16.0 does not implement that Caddy option; `sort_query: true`
+is rejected by both schema and renderer rather than emitting an unsupported
+directive. `disable_query` is never rendered, and cookies are never stripped.
+
+The cache-handler emits `Cache-Status`. To measure one public GET without any
+write request, run the local-only benchmark against an explicitly chosen
+endpoint:
+
+```sh
+CACHE_BENCH_URL=https://public.example/ CACHE_BENCH_WARM_REQUESTS=5 \
+  CACHE_BENCH_CONCURRENT_REQUESTS=8 scripts/cache-benchmark.sh
+```
+
+It adds a unique query parameter so the same URL can be observed through cold,
+warm, and concurrent phases, then prints status code, TTFB, `Cache-Status`, and
+hit rate for each phase. It refuses `/api` paths and only invokes `curl`'s
+default GET method.
+
+The offline suite validates generated Caddy configuration and renderer
+ordering; the benchmark and the isolated live check are the places to verify
+actual upstream cache behavior.
 
 ## Rate Limiting
 

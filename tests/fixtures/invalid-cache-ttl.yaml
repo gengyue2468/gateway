@@ -1,0 +1,8 @@
+version: 1
+ingress:
+  - hostname: cache-policy.example
+    path: ^/public$
+    service: http://origin:8080
+    cache:
+      ttl: 0s
+  - service: http_status:444

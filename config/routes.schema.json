@@ -83,9 +83,49 @@
           "description": "Send this path directly from edge Caddy to the declared upstream, bypassing Anubis and edge Coraza/WAF. A configured route rate limit still applies. Requires hostname and path; bypass routes always disable cache and reject cache: true. Rewrite, load_balance, and an explicit health block are rendered on the edge route; an omitted health block retains the legacy no-probe behavior for direct routes."
         },
         "cache": {
-          "type": "boolean",
-          "default": false,
-          "description": "Explicitly opt into the shared GET/HEAD cache for this public route. Requests with any Cookie or Authorization header bypass the cache; application cookies are never stripped. The response must not vary on an unkeyed request header."
+          "description": "Explicitly opt into the shared GET/HEAD cache for this public route. The boolean form is retained for compatibility; the object form makes the cache policy route-specific.",
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "true opts in with the safe defaults; false disables caching."
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Cache policy for this route. An object opts in unless enabled is false. Requests with any Cookie or Authorization header, client no-cache directives, WebSocket upgrades, and login/admin/API/health paths bypass the cache; application cookies are never stripped. Responses with private, no-store, Set-Cookie, or Vary: * are not stored.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "ttl": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Maximum fresh lifetime of a cached response, for example 4h."
+                },
+                "stale": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "How long an expired response may be served stale while revalidation is attempted, for example 30s."
+                },
+                "default_cache_control": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Cache-Control used when the upstream response has no cache directive."
+                },
+                "max_cacheable_body_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Maximum response body size stored in the cache."
+                },
+                "sort_query": {
+                  "const": false,
+                  "default": false,
+                  "description": "Reserved for a cache-handler version that supports safe query sorting. cache-handler v0.16.0 does not support sort_query, so true is rejected and no query-sorting directive is rendered. The default cache key always retains the complete query string."
+                }
+              }
+            }
+          ]
         },
         "load_balance": {
           "type": "string",

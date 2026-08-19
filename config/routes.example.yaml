@@ -36,8 +36,14 @@ ingress:
 
   - hostname: your-domain.example
     service: https://origin.example.com
-    # Cache is opt-in and is only safe for public responses.
-    cache: true
+    # Cache is opt-in and is only safe for public responses. The full query
+    # remains in the cache key; sort_query is rejected with cache-handler 0.16.
+    cache:
+      ttl: 4h
+      stale: 30s
+      default_cache_control: "public, max-age=14400"
+      max_cacheable_body_bytes: 1048576
+      sort_query: false
     health:
       uri: /
 

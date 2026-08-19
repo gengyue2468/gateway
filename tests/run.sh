@@ -49,6 +49,7 @@ validate_schema \
     "$repo_dir/tests/fixtures/empty-routes.yaml" \
     "$repo_dir/tests/fixtures/path-only-backend.yaml" \
     "$repo_dir/tests/fixtures/cache-safety.yaml" \
+    "$repo_dir/tests/fixtures/cache-policy.yaml" \
     "$repo_dir/tests/fixtures/valid-bypass-options.yaml"
 pass "route fixtures pass JSON schema validation"
 
@@ -84,6 +85,7 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
 	|| ! grep -F 'dns_challenge_override_domain "_acme-challenge.cdnno.de"' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F 'issuer acme' "$tmp_dir/edge.Caddyfile" >/dev/null \
 	|| ! grep -F 'ttl 4h' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'stale 0s' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'mode strict' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'default_cache_control "public, max-age=14400"' "$tmp_dir/backend.caddy" >/dev/null \
     || ! grep -F 'max_cacheable_body_bytes 1048576' "$tmp_dir/backend.caddy" >/dev/null \
@@ -108,6 +110,9 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
 	|| ! grep -F 'meta http-equiv=\"refresh\"' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'not header Cookie *' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'not header Authorization *' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'not header Cache-Control *no-cache*' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'not header Cache-Control *no-store*' "$tmp_dir/backend.caddy" >/dev/null \
+	|| ! grep -F 'not header Pragma *no-cache*' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'not path /api /api/* /login* /logout* /admin* /healthz /healthz/*' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'header Set-Cookie *' "$tmp_dir/backend.caddy" >/dev/null \
 	|| ! grep -F 'header >Cache-Control "no-store"' "$tmp_dir/backend.caddy" >/dev/null \
@@ -169,6 +174,23 @@ if grep -F 'redir "https://your-domain.example{uri}" 302' "$tmp_dir/edge.Caddyfi
 	exit 1
 fi
 pass "rewrite, redirect, meta redirect, and Anubis bypass render"
+
+run_renderer \
+    --config /tests/fixtures/cache-policy.yaml \
+    --edge-output /tmp/gateway-tests/cache-policy-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/cache-policy-backend.caddy
+if ! grep -F 'ttl 30m' "$tmp_dir/cache-policy-backend.caddy" >/dev/null \
+    || ! grep -F 'stale 45s' "$tmp_dir/cache-policy-backend.caddy" >/dev/null \
+    || ! grep -F 'default_cache_control "public, max-age=60"' "$tmp_dir/cache-policy-backend.caddy" >/dev/null \
+    || ! grep -F 'max_cacheable_body_bytes 65536' "$tmp_dir/cache-policy-backend.caddy" >/dev/null; then
+    printf 'not ok - route-level cache policy was not rendered\n' >&2
+    exit 1
+fi
+if grep -E '(^|[[:space:]])(sort_query|disable_query)([[:space:]]|$)' "$tmp_dir/cache-policy-backend.caddy" >/dev/null; then
+    printf 'not ok - unsupported or unsafe query-key directive was rendered\n' >&2
+    exit 1
+fi
+pass "route-level cache policy renders without query or cookie bypasses"
 
 run_renderer \
     --config /tests/fixtures/valid-bypass-options.yaml \
@@ -249,6 +271,8 @@ validate_caddy_configs valid-bypass-options.yaml
 pass "valid bypass options pass real Caddy validation"
 validate_caddy_configs cache-safety.yaml
 pass "cache safety generated Caddy configuration validates"
+validate_caddy_configs cache-policy.yaml
+pass "route-level cache policy generated Caddy configuration validates"
 
 if ! grep -F 'trusted_proxies static 127.0.0.1/32 ::1/128' "$repo_dir/config/caddy/Caddyfile" >/dev/null \
     || ! grep -F 'trusted_proxies_strict' "$repo_dir/config/caddy/Caddyfile" >/dev/null \
@@ -272,6 +296,8 @@ expect_failure "invalid health settings are rejected" \
     run_renderer --config /tests/fixtures/invalid-health.yaml --check
 expect_failure "unknown YAML fields are rejected" \
     run_renderer --config /tests/fixtures/invalid-unknown-field.yaml --check
+expect_failure "unknown cache policy fields are rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-unknown-field.yaml --check
 expect_failure "redirect cannot include an upstream" \
     run_renderer --config /tests/fixtures/invalid-action-service.yaml --check
 expect_failure "Anubis bypass requires a path" \
@@ -298,6 +324,10 @@ expect_failure "rate limit methods must be uppercase HTTP methods" \
     run_renderer --config /tests/fixtures/invalid-rate-limit-method.yaml --check
 expect_failure "route methods must be uppercase HTTP methods" \
     run_renderer --config /tests/fixtures/invalid-route-method.yaml --check
+expect_failure "unsupported cache query sorting is rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-sort-query.yaml --check
+expect_failure "zero cache TTL is rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-ttl.yaml --check
 expect_failure "invalid ACME override is rejected" \
     docker run --rm \
         -e ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=not_a_dns_name \
@@ -307,6 +337,8 @@ expect_failure "invalid ACME override is rejected" \
 
 expect_failure "schema rejects unknown fields" \
     validate_schema "$repo_dir/tests/fixtures/invalid-unknown-field.yaml"
+expect_failure "schema rejects unknown cache policy fields" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-unknown-field.yaml"
 expect_failure "schema rejects an edge bypass without hostname" \
     validate_schema "$repo_dir/tests/fixtures/invalid-bypass-path-only.yaml"
 expect_failure "schema rejects a service route without hostname or path" \
@@ -321,6 +353,8 @@ expect_failure "schema rejects meta redirect rate limits" \
     validate_schema "$repo_dir/tests/fixtures/invalid-meta-rate-limit.yaml"
 expect_failure "schema rejects catch-all options" \
     validate_schema "$repo_dir/tests/fixtures/invalid-catchall-option.yaml"
+expect_failure "schema rejects unsupported cache query sorting" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-sort-query.yaml"
 
 docker run --rm \
     -e ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=cdnno.de \
@@ -339,6 +373,8 @@ pass "root CNAME ACME override renders"
 
 sh -n "$repo_dir/docker/gateway/entrypoint.sh"
 pass "gateway entrypoint passes shell syntax check"
+sh -n "$repo_dir/scripts/cache-benchmark.sh"
+pass "cache benchmark passes shell syntax check"
 
 ACME_EMAIL=admin@example.com \
 CF_API_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
