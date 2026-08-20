@@ -542,4 +542,27 @@ if [ "${RUN_CACHE_LIVE:-0}" = 1 ]; then
     pass "live cache Set-Cookie safety"
 fi
 
-printf '%s tests passed\n' "$passed"
+
+policy_file="$repo_dir/config/anubis/bot-policy.yaml"
+if ! grep -A2 -F "name: umami-script" "$policy_file" | grep -F 'action: ALLOW' >/dev/null \
+    || ! grep -A2 -F "name: komari-manifest" "$policy_file" | grep -F 'action: ALLOW' >/dev/null \
+    || ! grep -A2 -F "name: komari-favicon" "$policy_file" | grep -F 'action: ALLOW' >/dev/null; then
+    printf '%s\n' 'not ok - static host allow rules changed' >&2
+    exit 1
+fi
+if ! grep -A2 -F "name: www-non-read" "$policy_file" | grep -F 'action: DENY' >/dev/null \
+    || ! grep -A2 -F "name: www-tty-or-query" "$policy_file" | grep -F 'action: CHALLENGE' >/dev/null \
+    || ! grep -A2 -F "name: www-public-read" "$policy_file" | grep -F 'action: CHALLENGE' >/dev/null; then
+    printf '%s\n' 'not ok - www Anubis actions are incorrect' >&2
+    exit 1
+fi
+if ! awk '
+    /name: www-public-read/ { public = NR }
+    /import: \(data\)\/crawlers\/_allow-good.yaml/ { crawlers = NR }
+    END { exit !(public > 0 && crawlers > public) }
+' "$policy_file"; then
+    printf '%s\n' 'not ok - good-crawler import bypasses the www public challenge' >&2
+    exit 1
+fi
+pass "www pages challenge while static allows and tty/query boundaries remain"
+printf "%s tests passed\n" "$passed"

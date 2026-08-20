@@ -24,7 +24,7 @@ bots:
 
   - name: www-public-read
     expression: 'host == "www.gengyue.dev" && (method == "GET" || method == "HEAD") && path != "/tty" && !path.startsWith("/tty/") && size(query) == 0'
-    action: ALLOW
+    action: CHALLENGE
 
   - import: (data)/crawlers/_allow-good.yaml
 

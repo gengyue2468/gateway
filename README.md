@@ -216,3 +216,11 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
 Tests stay outside the image and run from the repository with `tests/run.sh`.
+
+For `www.gengyue.dev`, non-GET/HEAD requests remain denied. GET/HEAD requests
+for ordinary pages without a query string receive an Anubis challenge; query
+requests and `/tty` (including descendants) also challenge. The `/tty(/.*)?`
+GET/HEAD edge bypass remains in the route configuration, so its WebSocket path
+is not changed by the ordinary-page policy. The three exact static-host rules
+remain ALLOW rules, and the good-crawler import is evaluated after the www
+page challenge.

@@ -45,3 +45,8 @@ For a local port-forward or host-mapped Caddy site, set `CACHE_BENCH_HOST` to
 the public hostname while keeping `CACHE_BENCH_URL` on `127.0.0.1`. The
 benchmark appends a unique query parameter, uses only curl's default GET
 method, and refuses `/api` targets. It never sends a write request.
+
+The policy checks assert that ordinary no-query GET/HEAD pages on
+`www.gengyue.dev` challenge, while non-read methods remain denied, query and
+`/tty` requests remain challenge rules, the three exact static-host ALLOW rules
+are unchanged, and the good-crawler import cannot bypass the www challenge.
