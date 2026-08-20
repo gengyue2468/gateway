@@ -14,6 +14,10 @@ bots:
   - import: (data)/bots/_deny-pathological.yaml
   - import: (data)/bots/headless-browsers.yaml
   - import: (data)/meta/ai-block-aggressive.yaml
+  - name: apex-redirect-read
+    expression: 'host == "gengyue.dev" && (method == "GET" || method == "HEAD") && size(query) == 0'
+    action: ALLOW
+
   - name: www-non-read
     expression: 'host == "www.gengyue.dev" && method != "GET" && method != "HEAD"'
     action: DENY
