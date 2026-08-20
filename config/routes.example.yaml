@@ -6,18 +6,19 @@ ingress:
   # and edge Coraza/WAF, going directly from edge Caddy to the declared
   # upstream. The route rate limit still runs before this proxy. Bypass routes
   # may also use rewrite, load_balance, and an explicit health configuration.
-  - hostname: terminal.your-domain.example
+  # Only GET/HEAD bypass; other methods continue through edge WAF and Anubis.
+  - hostname: your-domain.example
     path: ^/tty(/.*)?$
     service: https://origin.example.com
     cache: false
-    methods: [GET]
+    methods: [GET, HEAD]
     bypass_anubis: true
     rate_limit:
       name: terminal_per_client
       key: "{remote_host}"
       window: 1m
       events: 60
-      methods: [GET]
+      methods: [GET, HEAD]
       ipv6_prefix: 64
 
   # redirect is a normal HTTP 302; no status field is needed.
@@ -43,6 +44,9 @@ ingress:
       stale: 30s
       default_cache_control: "public, max-age=14400"
       max_cacheable_body_bytes: 1048576
+      # Defense in depth: this same-host path remains uncacheable even if a
+      # request reaches the backend instead of the direct edge bypass.
+      exclude_paths: ["^/tty(/.*)?$"]
       sort_query: false
     health:
       uri: /

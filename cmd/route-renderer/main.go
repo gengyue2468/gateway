@@ -51,12 +51,13 @@ type Route struct {
 // CacheConfig accepts the historical boolean shorthand as well as route-level
 // cache policy. The object form is an explicit opt-in unless enabled is false.
 type CacheConfig struct {
-	Enabled               *bool   `yaml:"enabled,omitempty"`
-	TTL                   string  `yaml:"ttl,omitempty"`
-	Stale                 string  `yaml:"stale,omitempty"`
-	DefaultCacheControl   string  `yaml:"default_cache_control,omitempty"`
-	MaxCacheableBodyBytes *uint64 `yaml:"max_cacheable_body_bytes,omitempty"`
-	SortQuery             *bool   `yaml:"sort_query,omitempty"`
+	Enabled               *bool    `yaml:"enabled,omitempty"`
+	TTL                   string   `yaml:"ttl,omitempty"`
+	Stale                 string   `yaml:"stale,omitempty"`
+	DefaultCacheControl   string   `yaml:"default_cache_control,omitempty"`
+	MaxCacheableBodyBytes *uint64  `yaml:"max_cacheable_body_bytes,omitempty"`
+	SortQuery             *bool    `yaml:"sort_query,omitempty"`
+	ExcludePaths          []string `yaml:"exclude_paths,omitempty"`
 }
 
 var cacheConfigFields = map[string]struct{}{
@@ -66,6 +67,34 @@ var cacheConfigFields = map[string]struct{}{
 	"default_cache_control":    {},
 	"max_cacheable_body_bytes": {},
 	"sort_query":               {},
+	"exclude_paths":            {},
+}
+
+func validateCacheConfigField(name string, node *yaml.Node) error {
+	switch name {
+	case "enabled", "sort_query":
+		if node.Kind != yaml.ScalarNode || node.Tag != "!!bool" {
+			return fmt.Errorf("cache.%s must be a boolean", name)
+		}
+	case "ttl", "stale", "default_cache_control":
+		if node.Kind != yaml.ScalarNode || node.Tag != "!!str" {
+			return fmt.Errorf("cache.%s must be a string", name)
+		}
+	case "max_cacheable_body_bytes":
+		if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {
+			return errors.New("cache.max_cacheable_body_bytes must be an integer")
+		}
+	case "exclude_paths":
+		if node.Kind != yaml.SequenceNode {
+			return errors.New("cache.exclude_paths must be a list of strings")
+		}
+		for index, item := range node.Content {
+			if item.Kind != yaml.ScalarNode || item.Tag != "!!str" {
+				return fmt.Errorf("cache.exclude_paths item %d must be a string", index+1)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *CacheConfig) UnmarshalYAML(node *yaml.Node) error {
@@ -91,6 +120,9 @@ func (c *CacheConfig) UnmarshalYAML(node *yaml.Node) error {
 		if _, ok := cacheConfigFields[key.Value]; !ok {
 			return fmt.Errorf("cache contains unknown field %q", key.Value)
 		}
+		if err := validateCacheConfigField(key.Value, node.Content[index+1]); err != nil {
+			return err
+		}
 	}
 	type plainCacheConfig CacheConfig
 	var value plainCacheConfig
@@ -106,6 +138,7 @@ type normalizedCache struct {
 	Stale                 string
 	DefaultCacheControl   string
 	MaxCacheableBodyBytes uint64
+	ExcludePaths          []string
 }
 
 type ServiceList []string
@@ -429,8 +462,8 @@ func validateRoute(index int, route Route, isLast bool) error {
 
 func validateCacheConfig(prefix string, cache CacheConfig) error {
 	if cache.Enabled != nil && !*cache.Enabled {
-		if cache.TTL != "" || cache.Stale != "" || cache.DefaultCacheControl != "" || cache.MaxCacheableBodyBytes != nil || (cache.SortQuery != nil && *cache.SortQuery) {
-			return fmt.Errorf("%s disabled cache cannot define cache policy", prefix)
+		if cache.TTL != "" || cache.Stale != "" || cache.DefaultCacheControl != "" || cache.MaxCacheableBodyBytes != nil || (cache.SortQuery != nil && *cache.SortQuery) || len(cache.ExcludePaths) > 0 {
+			return fmt.Errorf("%s disabled cache cannot define an active cache policy", prefix)
 		}
 		return nil
 	}
@@ -459,6 +492,27 @@ func validateCacheConfig(prefix string, cache CacheConfig) error {
 	}
 	if cache.MaxCacheableBodyBytes != nil && *cache.MaxCacheableBodyBytes == 0 {
 		return fmt.Errorf("%s cache.max_cacheable_body_bytes must be positive", prefix)
+	}
+	if cache.ExcludePaths != nil {
+		if len(cache.ExcludePaths) == 0 {
+			return fmt.Errorf("%s cache.exclude_paths must contain at least one path regexp", prefix)
+		}
+		seen := make(map[string]struct{}, len(cache.ExcludePaths))
+		for index, pattern := range cache.ExcludePaths {
+			if strings.TrimSpace(pattern) == "" {
+				return fmt.Errorf("%s cache.exclude_paths item %d must not be empty", prefix, index+1)
+			}
+			if hasUnsafeText(pattern) {
+				return fmt.Errorf("%s cache.exclude_paths item %d contains a forbidden newline, backtick, or quote", prefix, index+1)
+			}
+			if _, err := regexp.Compile(pattern); err != nil {
+				return fmt.Errorf("%s cache.exclude_paths item %d has invalid path regexp: %w", prefix, index+1, err)
+			}
+			if _, ok := seen[pattern]; ok {
+				return fmt.Errorf("%s cache.exclude_paths repeats path regexp %q", prefix, pattern)
+			}
+			seen[pattern] = struct{}{}
+		}
 	}
 	if cache.SortQuery != nil && *cache.SortQuery {
 		return fmt.Errorf("%s cache.sort_query=true is unsupported by cache-handler v0.16.0; no query-normalizing Caddy directive was rendered", prefix)
@@ -614,6 +668,7 @@ func (r Route) cachePolicy() normalizedCache {
 	if r.Cache.MaxCacheableBodyBytes != nil {
 		result.MaxCacheableBodyBytes = *r.Cache.MaxCacheableBodyBytes
 	}
+	result.ExcludePaths = append([]string(nil), r.Cache.ExcludePaths...)
 	return result
 }
 
@@ -922,7 +977,7 @@ func renderOrigin(cfg Config) string {
 		}
 		renderMatcher(&b, index, route)
 		if route.isProxyRoute() && route.cacheEnabled() {
-			renderCacheMatcher(&b, index)
+			renderCacheMatcher(&b, index, route.cachePolicy())
 		}
 		b.WriteString("\n")
 	}
@@ -1004,7 +1059,7 @@ func renderMatcher(b *strings.Builder, index int, route Route) {
 	b.WriteString("}\n")
 }
 
-func renderCacheMatcher(b *strings.Builder, index int) {
+func renderCacheMatcher(b *strings.Builder, index int, cache normalizedCache) {
 	fmt.Fprintf(b, "@cacheable%d {\n", index)
 	b.WriteString("    method GET HEAD\n")
 	b.WriteString("    not header Cookie *\n")
@@ -1016,6 +1071,9 @@ func renderCacheMatcher(b *strings.Builder, index int) {
 	b.WriteString("    not header Upgrade *\n")
 	b.WriteString("    not header Upgrade websocket\n")
 	b.WriteString("    not path /api /api/* /login* /logout* /admin* /healthz /healthz/*\n")
+	for excludeIndex, pattern := range cache.ExcludePaths {
+		fmt.Fprintf(b, "    not path_regexp cache_exclude_%d_%d %s\n", index, excludeIndex, caddyQuote(pattern))
+	}
 	b.WriteString("}\n")
 }
 

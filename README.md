@@ -53,7 +53,7 @@ Routes may use these actions in addition to `service`:
 - `redirect: https://example.com{uri}` emits a normal HTTP 302; no status field is needed.
 - `rewrite: /new{uri}` changes the request URI internally before proxying and requires `service`.
 - `meta_redirect: https://example.com/` emits a browser-only 200 HTML meta refresh. Do not use it for HTTP-to-HTTPS or WebSocket traffic.
-- `bypass_anubis: true` sends a path directly from edge Caddy to the declared upstream, bypassing Anubis **and edge Coraza/WAF**. A configured route rate limit still applies. It requires `hostname` and `path`; bypass routes never use the cache, and `cache: true` is rejected. `rewrite`, `load_balance`, and explicit `health` settings are preserved on this edge route.
+- `bypass_anubis: true` sends a path directly from edge Caddy to the declared upstream, bypassing Anubis **and edge Coraza/WAF**. A configured route rate limit still applies. It requires `hostname` and `path`; bypass routes never use the cache, and `cache: true` is rejected. `rewrite`, `load_balance`, and explicit `health` settings are preserved on this edge route. Set route-level `methods: [GET, HEAD]` for a WebSocket-style bypass so only those methods use the direct handler; other methods continue through edge WAF and Anubis.
 
 Routes without `hostname` are intentional backend-only rules. They are evaluated
 by the origin Caddy after Anubis for any request that reaches it, and cannot use
@@ -80,8 +80,11 @@ Shared caching is an explicit opt-in: a normal proxy route must set
 `routes.yaml` is deny-all, and the example public homepage marks its intended
 cache behavior explicitly. This keeps an unreviewed route from becoming a
 shared cache by default. The object form supports `ttl`, `stale`,
-`default_cache_control`, and `max_cacheable_body_bytes`; omitted values retain
-the safe defaults of `4h`, `0s`, `public, max-age=14400`, and `1048576` bytes.
+`default_cache_control`, `max_cacheable_body_bytes`, and `exclude_paths`;
+omitted values retain the safe defaults of `4h`, `0s`,
+`public, max-age=14400`, and `1048576` bytes. For v1 compatibility, an object
+with `enabled: false` may retain an explicit no-op `sort_query: false`; active
+cache policy values remain invalid while caching is disabled.
 
 Opted-in routes cache only GET and HEAD requests without `Cookie`,
 `Authorization`, client `no-cache`/`no-store` directives, WebSocket upgrades,
@@ -89,6 +92,18 @@ or login/admin/API/health paths. The original request path is tested before any
 route rewrite, including `/api`, `/api/`, their children, `/healthz`, and
 `/healthz/`. The gateway never removes `Cookie`; application session cookies
 remain isolated and any request carrying a cookie bypasses the shared cache.
+
+`exclude_paths` is a non-empty, duplicate-free list of RE2 path regexps. The
+JSON Schema rejects empty, whitespace-only, CR/LF-containing, quoted, and
+backtick-containing entries, while the renderer performs the final Go RE2
+compilation check; the schema does not attempt to fully validate Go RE2
+syntax. Each entry is rendered as a uniquely named negated `path_regexp` inside
+the cache handler's own request matcher, so a matching request remains
+routable but can never enter that route's cache handler. Matching uses the
+original path before any route rewrite. This is useful as defense in depth when
+a same-host direct bypass such as `/tty` also has a cached backend catch-all. It
+does not create a bypass, change route selection, or move a request around the
+edge WAF/Anubis boundary.
 
 The bundled cache-handler v0.16/Souin 1.7.7 honors response `private`,
 `no-store`, and `Vary` (including separate keys for declared varying headers and
@@ -121,8 +136,12 @@ hit rate for each phase. It refuses `/api` paths and only invokes `curl`'s
 default GET method.
 
 The offline suite validates generated Caddy configuration and renderer
-ordering; the benchmark and the isolated live check are the places to verify
-actual upstream cache behavior.
+ordering; the benchmark and the isolated backend-cache live check are the
+places to verify actual upstream cache behavior. The live check starts only the
+generated backend Caddy and a local origin, not edge Caddy or Anubis. Origin
+access logs prove that two `/tty` requests both reach upstream while two
+`/ttyfoo` client requests reach upstream once because the second response is a
+cache hit. It also retains the Set-Cookie storage-safety check.
 
 ## Rate Limiting
 

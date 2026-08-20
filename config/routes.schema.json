@@ -4,7 +4,10 @@
   "description": "Cloudflared-inspired ingress rules rendered into Caddy configuration.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "ingress"],
+  "required": [
+    "version",
+    "ingress"
+  ],
   "properties": {
     "version": {
       "const": 1
@@ -40,7 +43,17 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"]
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "OPTIONS",
+              "CONNECT",
+              "TRACE"
+            ]
           },
           "description": "Optional HTTP methods that must match this route."
         },
@@ -118,12 +131,71 @@
                   "minimum": 1,
                   "description": "Maximum response body size stored in the cache."
                 },
+                "exclude_paths": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "not": {
+                      "pattern": "[\\r\\n\\u0060\\u0022]"
+                    }
+                  },
+                  "description": "RE2 path regexps that remain routable but never match this route's cache handler."
+                },
                 "sort_query": {
                   "const": false,
                   "default": false,
                   "description": "Reserved for a cache-handler version that supports safe query sorting. cache-handler v0.16.0 does not support sort_query, so true is rejected and no query-sorting directive is rendered. The default cache key always retains the complete query string."
                 }
-              }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "enabled"
+                    ],
+                    "properties": {
+                      "enabled": {
+                        "const": false
+                      }
+                    }
+                  },
+                  "then": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "ttl"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "stale"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "default_cache_control"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "max_cacheable_body_bytes"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "exclude_paths"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
             }
           ]
         },
@@ -174,7 +246,11 @@
         "rate_limit": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "window", "events"],
+          "required": [
+            "name",
+            "window",
+            "events"
+          ],
           "description": "A per-client rate limit for an edge route. Normal routes apply it after Coraza/WAF and before Anubis; bypass routes retain their direct edge placement.",
           "properties": {
             "name": {
@@ -200,7 +276,17 @@
               "uniqueItems": true,
               "items": {
                 "type": "string",
-                "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"]
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE",
+                  "OPTIONS",
+                  "CONNECT",
+                  "TRACE"
+                ]
               },
               "description": "Optional HTTP methods to rate limit. Leave OPTIONS out of API quotas when CORS preflight must remain inexpensive."
             },
@@ -219,47 +305,129 @@
       },
       "oneOf": [
         {
-          "required": ["service"],
+          "required": [
+            "service"
+          ],
           "not": {
             "anyOf": [
-              { "required": ["redirect"] },
-              { "required": ["meta_redirect"] }
+              {
+                "required": [
+                  "redirect"
+                ]
+              },
+              {
+                "required": [
+                  "meta_redirect"
+                ]
+              }
             ]
           }
         },
         {
-          "required": ["redirect"],
+          "required": [
+            "redirect"
+          ],
           "not": {
             "anyOf": [
-              { "required": ["service"] },
-              { "required": ["rewrite"] },
-              { "required": ["meta_redirect"] },
               {
-                "required": ["bypass_anubis"],
-                "properties": { "bypass_anubis": { "const": true } }
+                "required": [
+                  "service"
+                ]
               },
-              { "required": ["cache"] },
-              { "required": ["load_balance"] },
-              { "required": ["health"] },
-              { "required": ["rate_limit"] }
+              {
+                "required": [
+                  "rewrite"
+                ]
+              },
+              {
+                "required": [
+                  "meta_redirect"
+                ]
+              },
+              {
+                "required": [
+                  "bypass_anubis"
+                ],
+                "properties": {
+                  "bypass_anubis": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "required": [
+                  "cache"
+                ]
+              },
+              {
+                "required": [
+                  "load_balance"
+                ]
+              },
+              {
+                "required": [
+                  "health"
+                ]
+              },
+              {
+                "required": [
+                  "rate_limit"
+                ]
+              }
             ]
           }
         },
         {
-          "required": ["meta_redirect"],
+          "required": [
+            "meta_redirect"
+          ],
           "not": {
             "anyOf": [
-              { "required": ["service"] },
-              { "required": ["rewrite"] },
-              { "required": ["redirect"] },
               {
-                "required": ["bypass_anubis"],
-                "properties": { "bypass_anubis": { "const": true } }
+                "required": [
+                  "service"
+                ]
               },
-              { "required": ["cache"] },
-              { "required": ["load_balance"] },
-              { "required": ["health"] },
-              { "required": ["rate_limit"] }
+              {
+                "required": [
+                  "rewrite"
+                ]
+              },
+              {
+                "required": [
+                  "redirect"
+                ]
+              },
+              {
+                "required": [
+                  "bypass_anubis"
+                ],
+                "properties": {
+                  "bypass_anubis": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "required": [
+                  "cache"
+                ]
+              },
+              {
+                "required": [
+                  "load_balance"
+                ]
+              },
+              {
+                "required": [
+                  "health"
+                ]
+              },
+              {
+                "required": [
+                  "rate_limit"
+                ]
+              }
             ]
           }
         }
@@ -267,37 +435,73 @@
       "allOf": [
         {
           "anyOf": [
-            { "required": ["hostname"] },
-            { "required": ["path"] },
             {
-              "required": ["service"],
-              "properties": { "service": { "const": "http_status:444" } }
+              "required": [
+                "hostname"
+              ]
             },
             {
-              "required": ["service"],
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "service"
+              ],
+              "properties": {
+                "service": {
+                  "const": "http_status:444"
+                }
+              }
+            },
+            {
+              "required": [
+                "service"
+              ],
               "properties": {
                 "service": {
                   "type": "array",
                   "minItems": 1,
                   "maxItems": 1,
-                  "items": { "const": "http_status:444" }
+                  "items": {
+                    "const": "http_status:444"
+                  }
                 }
               }
             }
           ]
         },
         {
-          "if": { "required": ["rewrite"] },
-          "then": { "required": ["service"] }
-        },
-        {
-          "if": { "required": ["rate_limit"] },
+          "if": {
+            "required": [
+              "rewrite"
+            ]
+          },
           "then": {
-            "required": ["hostname"]
+            "required": [
+              "service"
+            ]
           }
         },
         {
-          "if": { "required": ["load_balance"] },
+          "if": {
+            "required": [
+              "rate_limit"
+            ]
+          },
+          "then": {
+            "required": [
+              "hostname"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "load_balance"
+            ]
+          },
           "then": {
             "properties": {
               "service": {
@@ -309,11 +513,15 @@
         },
         {
           "if": {
-            "required": ["service"],
+            "required": [
+              "service"
+            ],
             "properties": {
               "service": {
                 "type": "array",
-                "contains": { "const": "http_status:444" }
+                "contains": {
+                  "const": "http_status:444"
+                }
               }
             }
           },
@@ -321,36 +529,62 @@
             "properties": {
               "service": {
                 "maxItems": 1,
-                "items": { "const": "http_status:444" }
+                "items": {
+                  "const": "http_status:444"
+                }
               }
             }
           }
         },
         {
           "if": {
-            "required": ["bypass_anubis"],
-            "properties": { "bypass_anubis": { "const": true } }
+            "required": [
+              "bypass_anubis"
+            ],
+            "properties": {
+              "bypass_anubis": {
+                "const": true
+              }
+            }
           },
           "then": {
-            "required": ["service", "hostname", "path"],
-            "properties": { "cache": { "const": false } }
+            "required": [
+              "service",
+              "hostname",
+              "path"
+            ],
+            "properties": {
+              "cache": {
+                "const": false
+              }
+            }
           }
         },
         {
           "if": {
             "anyOf": [
               {
-                "required": ["service"],
-                "properties": { "service": { "const": "http_status:444" } }
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "const": "http_status:444"
+                  }
+                }
               },
               {
-                "required": ["service"],
+                "required": [
+                  "service"
+                ],
                 "properties": {
                   "service": {
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 1,
-                    "items": { "const": "http_status:444" }
+                    "items": {
+                      "const": "http_status:444"
+                    }
                   }
                 }
               }
@@ -359,20 +593,66 @@
           "then": {
             "not": {
               "anyOf": [
-                { "required": ["hostname"] },
-                { "required": ["path"] },
-                { "required": ["methods"] },
-                { "required": ["redirect"] },
-                { "required": ["rewrite"] },
-                { "required": ["meta_redirect"] },
                 {
-                  "required": ["bypass_anubis"],
-                  "properties": { "bypass_anubis": { "const": true } }
+                  "required": [
+                    "hostname"
+                  ]
                 },
-                { "required": ["cache"] },
-                { "required": ["load_balance"] },
-                { "required": ["health"] },
-                { "required": ["rate_limit"] }
+                {
+                  "required": [
+                    "path"
+                  ]
+                },
+                {
+                  "required": [
+                    "methods"
+                  ]
+                },
+                {
+                  "required": [
+                    "redirect"
+                  ]
+                },
+                {
+                  "required": [
+                    "rewrite"
+                  ]
+                },
+                {
+                  "required": [
+                    "meta_redirect"
+                  ]
+                },
+                {
+                  "required": [
+                    "bypass_anubis"
+                  ],
+                  "properties": {
+                    "bypass_anubis": {
+                      "const": true
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "cache"
+                  ]
+                },
+                {
+                  "required": [
+                    "load_balance"
+                  ]
+                },
+                {
+                  "required": [
+                    "health"
+                  ]
+                },
+                {
+                  "required": [
+                    "rate_limit"
+                  ]
+                }
               ]
             }
           }

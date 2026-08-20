@@ -32,6 +32,7 @@ run_renderer() {
     docker run --rm \
         -e "ACME_DNS_CHALLENGE_OVERRIDE_DOMAIN=$acme_override" \
         --entrypoint /usr/local/bin/route-renderer \
+        -v "$repo_dir/config:/tests/config:ro" \
         -v "$repo_dir/tests/fixtures:/tests/fixtures:ro" \
         -v "$tmp_dir:/tmp/gateway-tests" \
         "$image" "$@"
@@ -63,13 +64,16 @@ validate_schema() {
 }
 
 validate_schema \
+    "$repo_dir/config/routes.example.yaml" \
     "$repo_dir/tests/fixtures/valid-routes.yaml" \
     "$repo_dir/tests/fixtures/empty-routes.yaml" \
     "$repo_dir/tests/fixtures/path-only-backend.yaml" \
     "$repo_dir/tests/fixtures/cache-safety.yaml" \
     "$repo_dir/tests/fixtures/cache-policy.yaml" \
+    "$repo_dir/tests/fixtures/valid-cache-disabled-defaults.yaml" \
     "$repo_dir/tests/fixtures/valid-bypass-options.yaml" \
-    "$repo_dir/tests/fixtures/valid-normal-rate-limit.yaml"
+    "$repo_dir/tests/fixtures/valid-normal-rate-limit.yaml" \
+    "$repo_dir/tests/fixtures/live-cache.yaml"
 pass "route fixtures pass JSON schema validation"
 
 run_renderer --config /tests/fixtures/valid-routes.yaml --check
@@ -77,6 +81,19 @@ pass "valid routes pass validation"
 
 run_renderer --config /tests/fixtures/empty-routes.yaml --check
 pass "empty deny-all routes pass validation"
+
+run_renderer --config /tests/config/routes.example.yaml --check
+pass "example routes pass validation"
+
+run_renderer \
+    --config /tests/fixtures/valid-cache-disabled-defaults.yaml \
+    --edge-output /tmp/gateway-tests/cache-disabled-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/cache-disabled-backend.caddy
+if grep -F 'cache @cacheable0 {' "$tmp_dir/cache-disabled-backend.caddy" >/dev/null; then
+    printf '%s\n' 'not ok - disabled cache with v1-compatible default fields rendered a cache handler' >&2
+    exit 1
+fi
+pass "disabled cache accepts v1-compatible default fields"
 
 run_renderer \
     --config /tests/fixtures/no-active-health.yaml \
@@ -258,6 +275,35 @@ fi
 pass "bypass rewrite, load balancing, health, and original URI render"
 
 run_renderer \
+    --config /tests/fixtures/live-cache.yaml \
+    --edge-output /tmp/gateway-tests/cache-exclude-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/cache-exclude-backend.caddy
+awk '
+    /^    @bypass0 \{/ { copy = 1 }
+    copy { print }
+    copy && /^    \}/ { exit }
+' "$tmp_dir/cache-exclude-edge.Caddyfile" >"$tmp_dir/cache-exclude-bypass-matcher"
+if ! grep -F 'method GET HEAD' "$tmp_dir/cache-exclude-bypass-matcher" >/dev/null; then
+    printf '%s\n' 'not ok - same-host tty bypass lost its GET/HEAD method boundary' >&2
+    exit 1
+fi
+if ! grep -F 'not path_regexp cache_exclude_1_0 "^/tty(/.*)?$"' "$tmp_dir/cache-exclude-backend.caddy" >/dev/null \
+    || ! grep -F 'cache @cacheable1 {' "$tmp_dir/cache-exclude-backend.caddy" >/dev/null \
+    || grep -F 'handle @route0 {' "$tmp_dir/cache-exclude-backend.caddy" >/dev/null; then
+    printf 'not ok - same-host tty cache exclusion was not rendered on the backend cache handler\n' >&2
+    exit 1
+fi
+if ! awk '
+    /^    handle @bypass0 \{/ { bypass = NR }
+    /^        coraza_waf \{/ { waf = NR }
+    END { exit !(bypass > 0 && waf > 0 && bypass < waf) }
+' "$tmp_dir/cache-exclude-edge.Caddyfile"; then
+    printf 'not ok - same-host tty bypass was not placed before the edge WAF\n' >&2
+    exit 1
+fi
+pass "same-host bypass and backend cache exclusion preserve the security boundary"
+
+run_renderer \
     --config /tests/fixtures/cache-safety.yaml \
     --edge-output /tmp/gateway-tests/cache-safety-edge.Caddyfile \
     --origin-output /tmp/gateway-tests/cache-safety-backend.caddy
@@ -316,6 +362,8 @@ validate_caddy_configs valid-bypass-options.yaml
 pass "valid bypass options pass real Caddy validation"
 validate_caddy_configs valid-normal-rate-limit.yaml
 pass "normal route rate limit passes real Caddy validation"
+validate_caddy_configs live-cache.yaml
+pass "same-host bypass and cache exclusion pass real Caddy validation"
 validate_caddy_configs cache-safety.yaml
 pass "cache safety generated Caddy configuration validates"
 validate_caddy_configs cache-policy.yaml
@@ -345,6 +393,22 @@ expect_failure "unknown YAML fields are rejected" \
     run_renderer --config /tests/fixtures/invalid-unknown-field.yaml --check
 expect_failure "unknown cache policy fields are rejected" \
     run_renderer --config /tests/fixtures/invalid-cache-unknown-field.yaml --check
+expect_failure "cache policy scalar types are rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-types.yaml --check
+expect_failure "empty cache path exclusions are rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-exclude-empty.yaml --check
+expect_failure "empty cache path exclusion items are rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-exclude-empty-item.yaml --check
+expect_failure "whitespace-only cache path exclusion items are rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-exclude-whitespace.yaml --check
+expect_failure "invalid cache path exclusion regexps are rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-exclude-regex.yaml --check
+expect_failure "duplicate cache path exclusions are rejected" \
+    run_renderer --config /tests/fixtures/invalid-cache-exclude-duplicate.yaml --check
+expect_failure "cache path exclusions reject Caddy control characters" \
+    run_renderer --config /tests/fixtures/invalid-cache-exclude-control.yaml --check
+expect_failure "disabled cache objects reject policy fields" \
+    run_renderer --config /tests/fixtures/invalid-cache-disabled-policy.yaml --check
 expect_failure "redirect cannot include an upstream" \
     run_renderer --config /tests/fixtures/invalid-action-service.yaml --check
 expect_failure "Anubis bypass requires a path" \
@@ -386,6 +450,20 @@ expect_failure "schema rejects unknown fields" \
     validate_schema "$repo_dir/tests/fixtures/invalid-unknown-field.yaml"
 expect_failure "schema rejects unknown cache policy fields" \
     validate_schema "$repo_dir/tests/fixtures/invalid-cache-unknown-field.yaml"
+expect_failure "schema rejects invalid cache policy scalar types" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-types.yaml"
+expect_failure "schema rejects empty cache path exclusions" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-exclude-empty.yaml"
+expect_failure "schema rejects empty cache path exclusion items" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-exclude-empty-item.yaml"
+expect_failure "schema rejects whitespace-only cache path exclusion items" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-exclude-whitespace.yaml"
+expect_failure "schema rejects duplicate cache path exclusions" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-exclude-duplicate.yaml"
+expect_failure "schema rejects cache path exclusion control characters" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-exclude-control.yaml"
+expect_failure "schema rejects policy fields on disabled cache objects" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-cache-disabled-policy.yaml"
 expect_failure "schema rejects an edge bypass without hostname" \
     validate_schema "$repo_dir/tests/fixtures/invalid-bypass-path-only.yaml"
 expect_failure "schema rejects a service route without hostname or path" \

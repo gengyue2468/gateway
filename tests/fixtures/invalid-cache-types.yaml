@@ -1,0 +1,7 @@
+version: 1
+ingress:
+  - hostname: cache-types.example
+    service: http://origin:8080
+    cache:
+      enabled: "false"
+  - service: http_status:444

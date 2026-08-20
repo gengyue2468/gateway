@@ -14,6 +14,18 @@ bots:
   - import: (data)/bots/_deny-pathological.yaml
   - import: (data)/bots/headless-browsers.yaml
   - import: (data)/meta/ai-block-aggressive.yaml
+  - name: www-non-read
+    expression: 'host == "www.gengyue.dev" && method != "GET" && method != "HEAD"'
+    action: DENY
+
+  - name: www-tty-or-query
+    expression: 'host == "www.gengyue.dev" && (method == "GET" || method == "HEAD") && (path == "/tty" || path.startsWith("/tty/") || size(query) > 0)'
+    action: CHALLENGE
+
+  - name: www-public-read
+    expression: 'host == "www.gengyue.dev" && (method == "GET" || method == "HEAD") && path != "/tty" && !path.startsWith("/tty/") && size(query) == 0'
+    action: ALLOW
+
   - import: (data)/crawlers/_allow-good.yaml
 
   - name: generic-browser

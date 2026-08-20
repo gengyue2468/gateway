@@ -1,9 +1,20 @@
 version: 1
 ingress:
   - hostname: cache-live.example
-    path: ^/$
+    path: ^/tty(/.*)?$
     service: http://origin:8080
-    cache: true
+    cache: false
+    methods: [GET, HEAD]
+    bypass_anubis: true
+    rate_limit:
+      name: tty_per_client
+      window: 1m
+      events: 60
+      methods: [GET, HEAD]
+  - hostname: cache-live.example
+    service: http://origin:8080
+    cache:
+      exclude_paths: ["^/tty(/.*)?$"]
     health:
       active: false
   - service: http_status:444
