@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -34,18 +35,19 @@ type Config struct {
 }
 
 type Route struct {
-	Hostname     string        `yaml:"hostname,omitempty"`
-	Path         string        `yaml:"path,omitempty"`
-	Methods      []string      `yaml:"methods,omitempty"`
-	Service      ServiceList   `yaml:"service,omitempty"`
-	Redirect     string        `yaml:"redirect,omitempty"`
-	Rewrite      string        `yaml:"rewrite,omitempty"`
-	MetaRedirect string        `yaml:"meta_redirect,omitempty"`
-	BypassAnubis bool          `yaml:"bypass_anubis,omitempty"`
-	Cache        *CacheConfig  `yaml:"cache,omitempty"`
-	LoadBalance  string        `yaml:"load_balance,omitempty"`
-	Health       *HealthConfig `yaml:"health,omitempty"`
-	RateLimit    *RateLimit    `yaml:"rate_limit,omitempty"`
+	Hostname         string        `yaml:"hostname,omitempty"`
+	Path             string        `yaml:"path,omitempty"`
+	Methods          []string      `yaml:"methods,omitempty"`
+	AllowedRemoteIPs RemoteIPList  `yaml:"allowed_remote_ips,omitempty"`
+	Service          ServiceList   `yaml:"service,omitempty"`
+	Redirect         string        `yaml:"redirect,omitempty"`
+	Rewrite          string        `yaml:"rewrite,omitempty"`
+	MetaRedirect     string        `yaml:"meta_redirect,omitempty"`
+	BypassAnubis     bool          `yaml:"bypass_anubis,omitempty"`
+	Cache            *CacheConfig  `yaml:"cache,omitempty"`
+	LoadBalance      string        `yaml:"load_balance,omitempty"`
+	Health           *HealthConfig `yaml:"health,omitempty"`
+	RateLimit        *RateLimit    `yaml:"rate_limit,omitempty"`
 }
 
 // CacheConfig accepts the historical boolean shorthand as well as route-level
@@ -142,6 +144,23 @@ type normalizedCache struct {
 }
 
 type ServiceList []string
+
+type RemoteIPList []string
+
+func (ips *RemoteIPList) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.SequenceNode {
+		return errors.New("allowed_remote_ips must be a list of CIDR strings")
+	}
+	values := make(RemoteIPList, 0, len(node.Content))
+	for index, item := range node.Content {
+		if item.Kind != yaml.ScalarNode || item.Tag != "!!str" {
+			return fmt.Errorf("allowed_remote_ips item %d must be a string", index+1)
+		}
+		values = append(values, item.Value)
+	}
+	*ips = values
+	return nil
+}
 
 func (s *ServiceList) UnmarshalYAML(node *yaml.Node) error {
 	switch node.Kind {
@@ -311,6 +330,9 @@ func validateRoute(index int, route Route, isLast bool) error {
 			return fmt.Errorf("%s wildcard must be a leading *.example.com", prefix)
 		}
 	}
+	if err := validateAllowedRemoteIPs(prefix, route); err != nil {
+		return err
+	}
 	if route.Path != "" {
 		if _, err := regexp.Compile(route.Path); err != nil {
 			return fmt.Errorf("%s has invalid path regexp: %w", prefix, err)
@@ -329,7 +351,7 @@ func validateRoute(index int, route Route, isLast bool) error {
 		if !isLast {
 			return fmt.Errorf("%s catch-all must be the final rule", prefix)
 		}
-		if len(route.Methods) > 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis {
+		if len(route.Methods) > 0 || route.Cache != nil || route.LoadBalance != "" || route.Health != nil || route.BypassAnubis || len(route.AllowedRemoteIPs) > 0 {
 			return fmt.Errorf("%s catch-all cannot have route options", prefix)
 		}
 		return nil
@@ -456,6 +478,35 @@ func validateRoute(index int, route Route, isLast bool) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateAllowedRemoteIPs(prefix string, route Route) error {
+	if route.AllowedRemoteIPs == nil {
+		return nil
+	}
+	if route.Hostname == "" {
+		return fmt.Errorf("%s allowed_remote_ips requires hostname for an edge route", prefix)
+	}
+	if len(route.AllowedRemoteIPs) == 0 {
+		return fmt.Errorf("%s allowed_remote_ips must contain at least one CIDR", prefix)
+	}
+
+	seen := make(map[string]struct{}, len(route.AllowedRemoteIPs))
+	for index, value := range route.AllowedRemoteIPs {
+		if strings.TrimSpace(value) != value || value == "" {
+			return fmt.Errorf("%s allowed_remote_ips item %d must be a non-empty CIDR", prefix, index+1)
+		}
+		parsed, err := netip.ParsePrefix(value)
+		if err != nil || (!parsed.Addr().Is4() && !parsed.Addr().Is6()) {
+			return fmt.Errorf("%s allowed_remote_ips item %d is not a valid IPv4 or IPv6 CIDR %q", prefix, index+1, value)
+		}
+		key := parsed.Masked().String()
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%s allowed_remote_ips repeats CIDR %q", prefix, value)
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }
@@ -636,7 +687,8 @@ func (r Route) isCatchAll() bool {
 		r.Cache == nil &&
 		r.LoadBalance == "" &&
 		r.Health == nil &&
-		r.RateLimit == nil
+		r.RateLimit == nil &&
+		len(r.AllowedRemoteIPs) == 0
 }
 
 func (r Route) cacheEnabled() bool {
@@ -749,21 +801,33 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 		if route.isCatchAll() || !route.BypassAnubis {
 			continue
 		}
-		fmt.Fprintf(&b, "    @bypass%d {\n", index)
-		if route.Hostname != "" {
-			fmt.Fprintf(&b, "        host %s\n", route.Hostname)
-		}
-		fmt.Fprintf(&b, "        path_regexp bypass%d %s\n", index, caddyQuote(route.Path))
-		if len(route.Methods) > 0 {
-			fmt.Fprintf(&b, "        method %s\n", strings.Join(route.Methods, " "))
-		}
-		b.WriteString("    }\n")
+		renderEdgeRouteMatcher(&b, "bypass", index, route)
 	}
 	for index, route := range cfg.Ingress {
 		if route.isCatchAll() || route.BypassAnubis || route.RateLimit == nil {
 			continue
 		}
 		renderEdgeRateLimitMatcher(&b, index, route)
+	}
+	for index, route := range cfg.Ingress {
+		if route.isCatchAll() || route.BypassAnubis || route.RateLimit != nil || len(route.AllowedRemoteIPs) == 0 {
+			continue
+		}
+		renderEdgeRouteMatcher(&b, "route", index, route)
+	}
+	for index, route := range cfg.Ingress {
+		if route.isCatchAll() || len(route.AllowedRemoteIPs) == 0 {
+			continue
+		}
+		renderEdgeDeniedRouteMatcher(&b, index, route)
+	}
+	for index, route := range cfg.Ingress {
+		if route.isCatchAll() || len(route.AllowedRemoteIPs) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "    handle @route_denied%d {\n", index)
+		b.WriteString("        respond 403\n")
+		b.WriteString("    }\n")
 	}
 	for index, route := range cfg.Ingress {
 		if route.isCatchAll() || !route.BypassAnubis {
@@ -795,6 +859,14 @@ func renderEdge(cfg Config, acmeOverrideDomain string) string {
 		renderRateLimit(&b, "                ", *route.RateLimit)
 		renderEdgeProxy(&b, "                ", ServiceList{"127.0.0.1:8923"})
 		b.WriteString("            }\n")
+		b.WriteString("        }\n")
+	}
+	for index, route := range cfg.Ingress {
+		if route.isCatchAll() || route.BypassAnubis || route.RateLimit != nil || len(route.AllowedRemoteIPs) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "        handle @route%d {\n", index)
+		renderEdgeProxy(&b, "            ", ServiceList{"127.0.0.1:8923"})
 		b.WriteString("        }\n")
 	}
 	b.WriteString("        handle {\n")
@@ -897,17 +969,40 @@ func renderEdgeProxy(b *strings.Builder, indent string, services ServiceList) {
 	renderReverseProxy(b, indent, services, "", nil, true, false, false, "")
 }
 
-func renderEdgeRateLimitMatcher(b *strings.Builder, index int, route Route) {
-	fmt.Fprintf(b, "    @rate_limit%d {\n", index)
+func renderEdgeRouteMatcher(b *strings.Builder, prefix string, index int, route Route) {
+	matcher := fmt.Sprintf("%s%d", prefix, index)
+	fmt.Fprintf(b, "    @%s {\n", matcher)
 	if route.Hostname != "" {
 		fmt.Fprintf(b, "        host %s\n", route.Hostname)
 	}
 	if route.Path != "" {
-		fmt.Fprintf(b, "        path_regexp rate_limit%d %s\n", index, caddyQuote(route.Path))
+		fmt.Fprintf(b, "        path_regexp %s %s\n", matcher, caddyQuote(route.Path))
 	}
 	if len(route.Methods) > 0 {
 		fmt.Fprintf(b, "        method %s\n", strings.Join(route.Methods, " "))
 	}
+	if len(route.AllowedRemoteIPs) > 0 {
+		fmt.Fprintf(b, "        remote_ip %s\n", strings.Join(route.AllowedRemoteIPs, " "))
+	}
+	b.WriteString("    }\n")
+}
+
+func renderEdgeRateLimitMatcher(b *strings.Builder, index int, route Route) {
+	renderEdgeRouteMatcher(b, "rate_limit", index, route)
+}
+
+func renderEdgeDeniedRouteMatcher(b *strings.Builder, index int, route Route) {
+	fmt.Fprintf(b, "    @route_denied%d {\n", index)
+	if route.Hostname != "" {
+		fmt.Fprintf(b, "        host %s\n", route.Hostname)
+	}
+	if route.Path != "" {
+		fmt.Fprintf(b, "        path_regexp route_denied%d %s\n", index, caddyQuote(route.Path))
+	}
+	if len(route.Methods) > 0 {
+		fmt.Fprintf(b, "        method %s\n", strings.Join(route.Methods, " "))
+	}
+	fmt.Fprintf(b, "        not remote_ip %s\n", strings.Join(route.AllowedRemoteIPs, " "))
 	b.WriteString("    }\n")
 }
 

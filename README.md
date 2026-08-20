@@ -60,6 +60,20 @@ by the origin Caddy after Anubis for any request that reaches it, and cannot use
 `bypass_anubis` because the edge site has no host to match. Keep at least one
 hostname route when the configuration is meant to serve public edge traffic.
 
+### Edge Source-IP Gates
+
+An edge hostname route may set `allowed_remote_ips` to a non-empty YAML array of
+IPv4 or IPv6 CIDRs, for example `allowed_remote_ips: [100.64.0.0/10]`. The
+renderer adds those ranges to that route's Caddy `remote_ip` matcher, ANDed with
+its hostname, path, and method matchers. This is useful for a Tailnet-only DoH
+path; a same-host catch-all without the field does not inherit the restriction.
+Backend-only routes without `hostname` cannot use this field.
+
+This is an edge source-IP gate, not authentication. Use private DNS and a
+private network or Tailnet policy/firewall with it, and do not treat the CIDR
+match as proof of user identity. It is unrelated to Caddy's `trusted_proxies`
+or `client_ip` settings.
+
 Route redirects remain in the backend Caddy configuration and therefore pass
 through the normal edge WAF and Anubis path. The edge's native HTTP-to-HTTPS
 redirect and WebSocket upgrades remain protocol responses; they are not HTML

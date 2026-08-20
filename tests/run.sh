@@ -72,6 +72,7 @@ validate_schema \
     "$repo_dir/tests/fixtures/cache-policy.yaml" \
     "$repo_dir/tests/fixtures/valid-cache-disabled-defaults.yaml" \
     "$repo_dir/tests/fixtures/valid-bypass-options.yaml" \
+    "$repo_dir/tests/fixtures/valid-allowed-remote-ips.yaml" \
     "$repo_dir/tests/fixtures/valid-normal-rate-limit.yaml" \
     "$repo_dir/tests/fixtures/live-cache.yaml"
 pass "route fixtures pass JSON schema validation"
@@ -84,6 +85,37 @@ pass "empty deny-all routes pass validation"
 
 run_renderer --config /tests/config/routes.example.yaml --check
 pass "example routes pass validation"
+
+run_renderer \
+    --config /tests/fixtures/valid-allowed-remote-ips.yaml \
+    --edge-output /tmp/gateway-tests/allowed-remote-ips-edge.Caddyfile \
+    --origin-output /tmp/gateway-tests/allowed-remote-ips-backend.caddy
+awk '
+    /^    @bypass0 \{/ { copy = 1 }
+    copy { print }
+    copy && /^    \}/ { exit }
+' "$tmp_dir/allowed-remote-ips-edge.Caddyfile" >"$tmp_dir/allowed-remote-ips-matcher"
+if ! grep -F 'host dns.gy.run' "$tmp_dir/allowed-remote-ips-matcher" >/dev/null \
+    || ! grep -F 'path_regexp bypass0 "^/dns-query$"' "$tmp_dir/allowed-remote-ips-matcher" >/dev/null \
+    || ! grep -F 'method GET POST' "$tmp_dir/allowed-remote-ips-matcher" >/dev/null \
+    || ! grep -F 'remote_ip 100.64.0.0/10' "$tmp_dir/allowed-remote-ips-matcher" >/dev/null; then
+    printf '%s\n' 'not ok - allowed remote IPs were not ANDed into the edge bypass matcher' >&2
+    exit 1
+fi
+awk '
+    /^    @route2 \{/ { copy = 1 }
+    copy { print }
+    copy && /^    \}/ { exit }
+' "$tmp_dir/allowed-remote-ips-edge.Caddyfile" >"$tmp_dir/allowed-remote-ips-normal-matcher"
+if ! grep -F 'host api.gy.run' "$tmp_dir/allowed-remote-ips-normal-matcher" >/dev/null \
+    || ! grep -F 'path_regexp route2 "^/private$"' "$tmp_dir/allowed-remote-ips-normal-matcher" >/dev/null \
+    || ! grep -F 'remote_ip 100.64.0.0/10' "$tmp_dir/allowed-remote-ips-normal-matcher" >/dev/null \
+    || ! grep -F 'not remote_ip 100.64.0.0/10' "$tmp_dir/allowed-remote-ips-edge.Caddyfile" >/dev/null \
+    || ! grep -F 'handle @route2 {' "$tmp_dir/allowed-remote-ips-edge.Caddyfile" >/dev/null; then
+    printf '%s\n' 'not ok - allowed remote IPs did not constrain a normal edge route' >&2
+    exit 1
+fi
+pass "allowed remote IPs render as an edge source-IP matcher"
 
 run_renderer \
     --config /tests/fixtures/valid-cache-disabled-defaults.yaml \
@@ -175,6 +207,10 @@ if ! grep -F 'reverse_proxy https://origin.example.com' "$tmp_dir/edge.Caddyfile
 fi
 if grep -F 'coraza_waf {' "$tmp_dir/backend.caddy" >/dev/null; then
 	printf 'not ok - Coraza was still rendered into the backend\n' >&2
+	exit 1
+fi
+if grep -F 'remote_ip ' "$tmp_dir/edge.Caddyfile" >/dev/null; then
+	printf 'not ok - legacy routes unexpectedly rendered an IP matcher\n' >&2
 	exit 1
 fi
 if ! grep -F 'ctl:ruleRemoveById=920420' "$repo_dir/config/caddy/waf/overrides.conf" >/dev/null \
@@ -360,6 +396,8 @@ validate_caddy_configs no-active-health.yaml
 pass "no-active-health generated Caddy configuration validates"
 validate_caddy_configs valid-bypass-options.yaml
 pass "valid bypass options pass real Caddy validation"
+validate_caddy_configs valid-allowed-remote-ips.yaml
+pass "allowed remote IPs pass real Caddy validation"
 validate_caddy_configs valid-normal-rate-limit.yaml
 pass "normal route rate limit passes real Caddy validation"
 validate_caddy_configs live-cache.yaml
@@ -417,6 +455,16 @@ expect_failure "edge Anubis bypass requires a hostname" \
     run_renderer --config /tests/fixtures/invalid-bypass-path-only.yaml --check
 expect_failure "Anubis bypass cannot enable cache" \
     run_renderer --config /tests/fixtures/invalid-bypass-cache.yaml --check
+expect_failure "invalid allowed remote CIDR is rejected" \
+    run_renderer --config /tests/fixtures/invalid-allowed-remote-ips.yaml --check
+expect_failure "empty allowed remote IP list is rejected" \
+    run_renderer --config /tests/fixtures/invalid-allowed-remote-ips-empty.yaml --check
+expect_failure "empty allowed remote IP item is rejected" \
+    run_renderer --config /tests/fixtures/invalid-allowed-remote-ips-empty-item.yaml --check
+expect_failure "duplicate allowed remote CIDR is rejected" \
+    run_renderer --config /tests/fixtures/invalid-allowed-remote-ips-duplicate.yaml --check
+expect_failure "backend-only allowed remote IP route is rejected" \
+    run_renderer --config /tests/fixtures/invalid-allowed-remote-ips-backend-only.yaml --check
 expect_failure "service route requires hostname or path" \
     run_renderer --config /tests/fixtures/invalid-pathless-service.yaml --check
 expect_failure "load balancing requires multiple upstreams" \
@@ -466,6 +514,16 @@ expect_failure "schema rejects policy fields on disabled cache objects" \
     validate_schema "$repo_dir/tests/fixtures/invalid-cache-disabled-policy.yaml"
 expect_failure "schema rejects an edge bypass without hostname" \
     validate_schema "$repo_dir/tests/fixtures/invalid-bypass-path-only.yaml"
+expect_failure "schema rejects an invalid allowed remote CIDR" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-allowed-remote-ips.yaml"
+expect_failure "schema rejects an empty allowed remote IP list" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-allowed-remote-ips-empty.yaml"
+expect_failure "schema rejects an empty allowed remote IP item" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-allowed-remote-ips-empty-item.yaml"
+expect_failure "schema rejects duplicate allowed remote CIDRs" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-allowed-remote-ips-duplicate.yaml"
+expect_failure "schema rejects backend-only allowed remote IP routes" \
+    validate_schema "$repo_dir/tests/fixtures/invalid-allowed-remote-ips-backend-only.yaml"
 expect_failure "schema rejects a service route without hostname or path" \
     validate_schema "$repo_dir/tests/fixtures/invalid-pathless-service.yaml"
 expect_failure "schema rejects load balancing with one upstream" \

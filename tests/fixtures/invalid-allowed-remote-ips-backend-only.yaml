@@ -1,0 +1,6 @@
+version: 1
+ingress:
+  - path: ^/dns-query$
+    service: https://dns-backend.example.com
+    allowed_remote_ips: [100.64.0.0/10]
+  - service: http_status:444

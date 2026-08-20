@@ -1,0 +1,9 @@
+version: 1
+ingress:
+  - hostname: dns.gy.run
+    path: ^/dns-query$
+    service: https://dns-backend.example.com
+    cache: false
+    bypass_anubis: true
+    allowed_remote_ips: [""]
+  - service: http_status:444

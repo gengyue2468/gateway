@@ -13,6 +13,9 @@ ingress:
     cache: false
     methods: [GET, HEAD]
     bypass_anubis: true
+    # Optional edge source-IP gate for a private/Tailnet-only endpoint. This
+    # is not authentication; pair it with private DNS and a private network.
+    allowed_remote_ips: [100.64.0.0/10]
     rate_limit:
       name: terminal_per_client
       key: "{remote_host}"
