@@ -557,6 +557,17 @@ if ! grep -A2 -F "name: www-non-read" "$policy_file" | grep -F 'action: DENY' >/
     exit 1
 fi
 if ! awk '
+    /import: \(data\)\/meta\/ai-block-aggressive.yaml/ { deny = NR }
+    /import: \(data\)\/crawlers\/_allow-good.yaml/ { crawlers = NR }
+    /name: apex-redirect-read/ { rule = NR; apex++ }
+    END { exit !(apex == 1 && rule > deny && crawlers > rule) }
+' "$policy_file" \
+    || ! grep -F 'expression: '\''host == "gengyue.dev" && (method == "GET" || method == "HEAD") && size(query) == 0'\''' "$policy_file" >/dev/null \
+    || ! grep -A2 -F "name: apex-redirect-read" "$policy_file" | grep -F 'action: ALLOW' >/dev/null; then
+    printf '%s\n' 'not ok - apex redirect read ALLOW rule is missing, imprecise, or misplaced' >&2
+    exit 1
+fi
+if ! awk '
     /name: www-public-read/ { public = NR }
     /import: \(data\)\/crawlers\/_allow-good.yaml/ { crawlers = NR }
     END { exit !(public > 0 && crawlers > public) }
@@ -565,4 +576,5 @@ if ! awk '
     exit 1
 fi
 pass "www pages challenge while static allows and tty/query boundaries remain"
+pass "apex redirect allows only queryless GET/HEAD requests before good crawlers"
 printf "%s tests passed\n" "$passed"

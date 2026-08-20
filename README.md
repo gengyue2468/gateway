@@ -224,3 +224,7 @@ GET/HEAD edge bypass remains in the route configuration, so its WebSocket path
 is not changed by the ordinary-page policy. The three exact static-host rules
 remain ALLOW rules, and the good-crawler import is evaluated after the www
 page challenge.
+
+For `gengyue.dev`, only queryless GET/HEAD requests are allowed so the apex
+redirect fallback is not challenged. Requests with a query string and all
+non-read methods remain in the challenge or deny pipeline.
